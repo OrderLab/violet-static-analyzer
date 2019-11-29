@@ -8,6 +8,7 @@
 #include "llvm/IR/Constants.h"
 #include <vector>
 #include <list>
+#include <queue>
 #include <fstream>
 
 using namespace llvm;
@@ -18,23 +19,24 @@ namespace {
 //    static cl::list <int> OffsetList("offset", cl::desc("Specify the position of the memeber in a struct variable"));
 
     class DefUse : public ModulePass {
+        struct variable_wrapper {
+            Value* variable;
+            int level;
+        };
+
         template<typename T>
         void getVariableUse(T *variable);
-
         template<typename T>
         bool isPointStructVariable(T *variable);
-
-        void printIndentation();
+        void handleMemoryAcess(Instruction *inst, variable_wrapper *variable, std::vector<variable_wrapper>* immediate_variable);
 
         template<typename T>
-        void handleMemoryAcess(Instruction *inst, T *variable);
+        std::vector<Value *> getVariables(T *variable,std::vector<int> offsetList);
 
     public:
         static char ID; // Pass identification, replacement for typeid
-        int mIndex = 0;
-        int OffsetList[2];
         std::ofstream result_log;
-        int indentation = 0;
+
 
         DefUse() : ModulePass(ID) {}
 
@@ -43,8 +45,11 @@ namespace {
          */
         bool runOnModule(Module &M) override {
             //TODO: automatically bound the variable name to the offset
-            OffsetList[0] = 14;
-            OffsetList[1] = 10;
+            std::vector<int> offsetList;
+            offsetList.push_back(14);
+            offsetList.push_back(54);
+            std::vector<Value *> variables;
+
             result_log.open("result.log");
             errs() << "We want to trace the uses of variable: " << gVariableName << "\n";
 
@@ -61,16 +66,14 @@ namespace {
             for (Module::iterator function = M.begin(), moduleEnd = M.end();
                  function != moduleEnd; function++) {
 
-                if (function->getName() == "thd_test_options") {
+//                if (function->getName() == "thd_test_options") {
                     for (SymbolTableList<Argument>::iterator arg = function->arg_begin();
                          arg != function->arg_end(); arg++) {
                         if (arg->getName() == gVariableName) {
-                            errs() << "It is a argument of Function \""
-                                   << arg->getParent()->getName()
-                                   << "\"\n";
-                            errs() << "The definition is " << *arg << "\n";
-                            getVariableUse(&(*arg));
+                            std::vector<Value *> v = getVariables(&(*arg),offsetList);
+                            variables.insert(variables.end(), v.begin(), v.end());
                         }
+
                     }
 
                     for (Function::iterator block = function->begin(), functionEnd = function->end();
@@ -78,20 +81,29 @@ namespace {
                         for (BasicBlock::iterator instruction = block->begin(), blockEnd = block->end();
                              instruction != blockEnd; instruction++) {
                             Instruction *inst = dyn_cast<Instruction>(instruction);
-                            if (inst->getName() == gVariableName && !inst->user_empty()) {
-                                errs() << "It is a local variable defined in Function \"" << function->getName()
-                                       << "\"\n";
-                                errs() << "The definition is" << *inst << "\n";
-                                getVariableUse(inst);
+                            if (inst->getName() == gVariableName) {
+                                std::vector<Value *> v  = getVariables(inst,offsetList);
+                                variables.insert(variables.end(), v.begin(), v.end());
                             }
                         }
                     }
+
+                    if (!variables.empty())
+                        errs() << "In function " << function->getName() << ", the variable is used in instruction: \n";
+                    for (auto variable: variables) {
+                        getVariableUse(variable);
+                    }
+
+                    variables.clear();
                 }
-            }
+//            }
+
             return false;
         }
-    };
 
+
+
+    };
 
     template<typename T>
     bool DefUse::isPointStructVariable(T *variable) {
@@ -101,82 +113,88 @@ namespace {
             return variable->getType()->isStructTy();
 
         pointerElementTpye = variable->getType()->getPointerElementType();
-        while (pointerElementTpye->isPointerTy()) {
-            pointerElementTpye = pointerElementTpye->getPointerElementType();
-        }
-
         return pointerElementTpye->isStructTy();
     }
 
-    template<typename T>
-    void DefUse::handleMemoryAcess(Instruction *inst, T *variable) {
+    /*
+     * If the variable is load to other variable, also check the usage of the other variable
+     */
+    void DefUse::handleMemoryAcess(Instruction *inst, variable_wrapper *variable,  std::vector< variable_wrapper>* immediate_variable) {
         if (StoreInst * storeInst = dyn_cast<StoreInst>(inst)) {
-            if (storeInst->getValueOperand() == variable) {
-                getVariableUse(storeInst->getPointerOperand());
+            if (storeInst->getValueOperand() == variable->variable) {
+                struct variable_wrapper v;
+                v.variable = storeInst->getPointerOperand();
+                v.level = variable->level;
+                immediate_variable->push_back(v);
             }
         }
 
         if (LoadInst * loadInst = dyn_cast<LoadInst>(inst)) {
-            if (loadInst->getPointerOperand() == variable) {
-                getVariableUse(loadInst);
+            if (loadInst->getPointerOperand() == variable->variable) {
+                struct variable_wrapper v;
+                v.variable = loadInst;
+                v.level = variable->level;
+                immediate_variable->push_back(v);
             }
         }
+
         return;
     }
 
     /*
-    * Find all the instructions that use the target variable. If the variable is assigned to other variable, also find the
-    * usage of the other variable
-    *
+     * Find all the terget variable
+     */
+    template<typename T>
+    std::vector<Value *> DefUse::getVariables(T *variable,std::vector<int> offsetList) {
+        std::vector<struct variable_wrapper> immediate_variable;
+        std::vector<Value *> result;
+        struct variable_wrapper init_variable;
+        init_variable.variable = variable;
+        init_variable.level = 0;
+        immediate_variable.push_back(init_variable);
+
+        while (!immediate_variable.empty()) {
+            struct variable_wrapper value = immediate_variable.back();
+
+            immediate_variable.pop_back();
+            if (value.level == offsetList.size()) {
+                result.push_back(value.variable);
+            }
+            for (User *U : value.variable->users()) {
+                if (Instruction *Inst = dyn_cast<Instruction>(U)) {
+                    handleMemoryAcess(Inst, &value, &immediate_variable);
+                    if (isa<GetElementPtrInst>(Inst)) {
+                        GetElementPtrInst *getElementPtrInst = dyn_cast<GetElementPtrInst>(Inst);
+                        ConstantInt *structOffset = dyn_cast<ConstantInt>(getElementPtrInst->getOperand(2));
+
+                        if (structOffset->getValue() == offsetList[value.level]) {
+                            struct variable_wrapper v;
+                            v.variable = Inst;
+                            v.level = value.level + 1;
+                            immediate_variable.push_back(v);
+                        }
+                    }
+                }
+            }
+        }
+        
+        return  result;
+    }
+
+
+    /*
+    * Find all the instructions that use the target variable.
     * @param variable the target variable
     */
     template<typename T>
     void DefUse::getVariableUse(T *variable) {
-        std::vector<Value::use_iterator> worklist;
-        bool isStruct = false;
 
-        if (isPointStructVariable(variable)) {
-            errs() << "Variable is a struct variable " << *variable << "\n";
-            isStruct = true;
-        }
-
-//                errs() << "Variable is used in instruction:\n";
         for (User *U : variable->users()) {
             if (Instruction * Inst = dyn_cast<Instruction>(U)) {
                 errs() << *Inst << "\n";
-                if (isStruct) {
-                    handleMemoryAcess(Inst, variable);
-                    if (isa<GetElementPtrInst>(Inst)) {
-                        GetElementPtrInst *getElementPtrInst = dyn_cast<GetElementPtrInst>(Inst);
-                        Type *operandType = getElementPtrInst->getPointerOperand()->getType();
-                        Type *pointValueType = operandType->getPointerElementType();
-                        ConstantInt *structOffset = dyn_cast<ConstantInt>(getElementPtrInst->getOperand(2));
-                        if (operandType->isPointerTy() && pointValueType->isStructTy()) {
-                            if (structOffset->getValue() == OffsetList[mIndex]) {
-                                errs() << "The offset is " << OffsetList[mIndex] << "\n";
-                                mIndex++;
-                                printIndentation();
-//                                    errs() git s<< *Inst << "\n";
-                                getVariableUse(Inst);
-                                errs() << "----------------\n";
-                                mIndex--;
-                            }
-                        }
-                    }
-                } else {
-                    handleMemoryAcess(Inst, variable);
-                    errs() << *Inst << "\n";
-                }
             }
         }
     }
-
-    void DefUse::printIndentation() {
-        for (int i = 0; i < indentation; i++) {
-            errs() << "\t";
-        }
-    }
-
 }
 
 char DefUse::ID = 0;
