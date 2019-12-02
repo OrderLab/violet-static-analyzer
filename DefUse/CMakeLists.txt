@@ -1,1 +1,1 @@
-add_library(defuse MODULE DefUse.cpp)
+add_library(defuse MODULE DefUse.cpp DefUse.h)
