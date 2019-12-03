@@ -78,14 +78,29 @@ struct bitVariableInfo {
     uint64_t bit;
 };
 
+typedef struct configurationInfo {
+    std::string configuration;
+    std::string variableOrType; // variable name for no struct member; type name for struct memeber
+    std::string bitname;
+    std::vector<int> offsetList;
+}ConfigInfo;
+
   /* Table of bit variable. */
-    static const struct bitVariableInfo handlerInfo[] ={
-        {"select distinct", SELECT_DISTINCT},
-        {"select straight join", SELECT_STRAIGHT_JOIN},
-        {"select describe",SELECT_DESCRIBE},
-        {"no_autocommit",OPTION_NOT_AUTOCOMMIT},
-        {"autocommit",OPTION_AUTOCOMMIT}
-    };
+static const struct bitVariableInfo handlerInfo[] ={
+    {"select distinct", SELECT_DISTINCT},
+    {"select straight join", SELECT_STRAIGHT_JOIN},
+    {"select describe",SELECT_DESCRIBE},
+    {"no_autocommit",OPTION_NOT_AUTOCOMMIT},
+    {"autocommit",OPTION_AUTOCOMMIT}
+};
+
+static ConfigInfo configInfo[] = {
+     {"","empty type","",{}},
+    {"autocommit","class.THD","no_autocommit",{14,10}},
+    {"query_cache_type","class.THD","",{14,54}},
+    {"innodb_flush_log_at_trx_commit","srv_flush_log_at_trx_commit","",{}},
+    {"innodb_flush_method","srv_unix_file_flush_method","",{}}
+};
 
 class DefUse : public ModulePass {
     struct variable_wrapper {
@@ -93,24 +108,30 @@ class DefUse : public ModulePass {
         uint level;
     };
 
+    typedef struct usage_info {
+        Instruction* inst;
+        std::vector<Function*> callers;
+        std::vector<Function*> callees;
+    }UsageInfo;
+
     template<typename T>
-    void getVariableUse(T *variable);
+    void getVariableUse(std::string configuration, T *variable);
     template<typename T>
     bool isPointStructVariable(T *variable);
     void
     handleMemoryAcess(Instruction *inst, variable_wrapper *variable, std::vector<variable_wrapper> *immediate_variable);
     template<typename T>
-    std::vector<Value *> getVariables(T *variable, std::vector<int> offsetList);
+    std::vector<Value *> getVariables(T *variable, std::vector<int>* offsetList);
     template<typename T>
     std::vector<Value *> getBitVariables(T *variable, uint64_t bitvalue);
     uint64_t getBitValue(std::string bit_name);
     bool runOnModule(Module &M) override;
     void getAnalysisUsage(AnalysisUsage &Info) const override;
-    void getCallee(Function* function,CallGraph* CG);
+    template<typename T>
+    bool getConfigurationInfo(T *variable, std::vector<int>* dst) ;
 
 public:
-    std::vector<Function *> target_functions;
-    std::ofstream parsed_log;
+    std::map<std::string,std::vector<usage_info>> usage_map;
     static char ID; // Pass identification, replacement for typeid
     DefUse() : ModulePass(ID) {}
 

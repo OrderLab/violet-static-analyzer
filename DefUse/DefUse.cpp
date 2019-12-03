@@ -8,6 +8,7 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/Analysis/CallGraph.h"
 #include "llvm/ADT/SCCIterator.h"
+#include "llvm/Support/FileSystem.h"
 #include "DefUse.h"
 #include <vector>
 #include <list>
@@ -16,56 +17,77 @@
 
 using namespace llvm;
 
-static cl::opt <std::string> gVariableName("v", cl::desc("Specify variable name"), cl::value_desc("variablename"));
-//    static cl::list <int> OffsetList("offset", cl::desc("Specify the position of the memeber in a struct variable"));
-static cl::opt <std::string> bit_name("b", cl::desc("Specify the bit variable name"), cl::value_desc("bit variable name"));
-
 
 /*
  * Perform the static analysis to each module,
  */
 bool DefUse::runOnModule(Module &M)  {
-    //TODO: automatically bound the variable name to the offset
-    std::vector<int> offsetList;
-    offsetList.push_back(14);
-    offsetList.push_back(10);
-    std::vector<Value *> variables;
-    uint64_t bit_value;
-
-    parsed_log.open("temp.log");
+    std::string outName ("result.log");
+    std::error_code OutErrorInfo;
+    llvm::raw_fd_ostream outFile(llvm::StringRef(outName),OutErrorInfo, sys::fs::F_None);
 
 
-    errs() << "We want to trace the uses of variable: " << gVariableName << "\n";
-    if (bit_name != "")
-        bit_value = getBitValue(bit_name);
-
-    errs() << "The bit name is " << bit_name << "\n";
-
-    //If the variable is a global variable, get the variable usage
+    // If the variable is a global variable, get the variable usage
     for (auto &Global : M.getGlobalList()) {
-        if (Global.getName() == gVariableName) {
-            errs() << "It is a global variable " << Global.getName() << "\n";
-            getVariableUse(&Global);
-            return false;
-        }
-    }
-
-    //If the variable is a local variable or an argument, get the variable usage
-    for (Module::iterator function = M.begin(), moduleEnd = M.end();
-         function != moduleEnd; function++) {
-        for (SymbolTableList<Argument>::iterator arg = function->arg_begin();
-             arg != function->arg_end(); arg++) {
-            if (arg->getName() == gVariableName) {
-                if (bit_name != "") {
-                    std::vector<Value *> options = getVariables(&(*arg),offsetList);
+        std::map<std::string,std::vector<Value *>> confVariableMap;
+        std::vector<int> configurations;
+        if (getConfigurationInfo(&Global,&configurations)) {
+            while(!configurations.empty()) {
+                int i = configurations.back();
+                configurations.pop_back();
+                if (configInfo[i].bitname != "") {
+                    std::vector<Value *> options = getVariables(&Global,&(configInfo[i].offsetList));
                     for (auto option:options) {
+                        uint64_t bit_value = getBitValue(configInfo[i].bitname);
                         std::vector<Value *> v = getBitVariables(option,bit_value);
-                        variables.insert(variables.end(), v.begin(), v.end());
+                        std::vector<Value*> usagelist = confVariableMap[configInfo[i].configuration];
+                        usagelist.insert(usagelist.end(), v.begin(), v.end());
+                        confVariableMap[configInfo[i].configuration] = usagelist;
                     }
                 } else {
-                    std::vector<Value *> v = getVariables(&(*arg),offsetList);
-                    variables.insert(variables.end(), v.begin(), v.end());
+                    std::vector<Value *> v = getVariables(&Global,&(configInfo[i].offsetList));
+                    std::vector<Value*> usagelist = confVariableMap[configInfo[i].configuration];
+                    usagelist.insert(usagelist.end(), v.begin(), v.end());
+                    confVariableMap[configInfo[i].configuration] = usagelist;
                 }
+            }
+
+            for (auto configUsage: confVariableMap) {
+                for (auto variable:configUsage.second) {
+                    getVariableUse(configUsage.first,variable);
+                }
+            }
+        }
+
+    }
+
+    // If the variable is a local variable or an argument, get the variable usage
+    for (Module::iterator function = M.begin(), moduleEnd = M.end();
+         function != moduleEnd; function++) {
+        std::map<std::string,std::vector<Value *>> confVariableMap;
+        for (auto arg = function->arg_begin(); arg != function->arg_end(); arg++) {
+            std::vector<int> configurations;
+            if (getConfigurationInfo(&(*arg),&configurations)) {
+                while(!configurations.empty()) {
+                    int i = configurations.back();
+                    configurations.pop_back();
+                    if (configInfo[i].bitname != "") {
+                        std::vector<Value *> options = getVariables(&(*arg),&(configInfo[i].offsetList));
+                        for (auto option:options) {
+                            uint64_t bit_value = getBitValue(configInfo[i].bitname);
+                            std::vector<Value *> v = getBitVariables(option,bit_value);
+                            std::vector<Value*> usagelist = confVariableMap[configInfo[i].configuration];
+                            usagelist.insert(usagelist.end(), v.begin(), v.end());
+                            confVariableMap[configInfo[i].configuration] = usagelist;
+                        }
+                    } else {
+                        std::vector<Value *> v = getVariables(&(*arg),&(configInfo[i].offsetList));
+                        std::vector<Value*> usagelist = confVariableMap[configInfo[i].configuration];
+                        usagelist.insert(usagelist.end(), v.begin(), v.end());
+                        confVariableMap[configInfo[i].configuration] = usagelist;
+                    }
+                }
+
             }
         }
 
@@ -73,53 +95,59 @@ bool DefUse::runOnModule(Module &M)  {
              block != functionEnd; ++block) {
             for (BasicBlock::iterator instruction = block->begin(), blockEnd = block->end();
                  instruction != blockEnd; instruction++) {
-                if (bit_name != "") {
-                    if (CallInst *callInst = dyn_cast<CallInst>(instruction)) {
-                        if (Function *calledFunction = callInst->getCalledFunction()) {
-                            if (calledFunction->getName() == "thd_test_options"){
-                                if (llvm::ConstantInt* CI = dyn_cast<llvm::ConstantInt>(callInst->getArgOperand(1))) {
-                                    if (CI->getSExtValue() & bit_value)
-                                        variables.push_back(callInst);
-                                }
-
+                Instruction *inst = dyn_cast<Instruction>(instruction);
+                if (!inst)
+                    continue;
+                std::vector<int> configurations;
+                if (getConfigurationInfo(inst,&configurations)) {
+                    while(!configurations.empty()) {
+                        int i = configurations.back();
+                        configurations.pop_back();
+                        if (configInfo[i].bitname != "") {
+                            std::vector<Value *> options = getVariables(inst,&(configInfo[i].offsetList));
+                            for (auto option:options) {
+                                uint64_t bit_value = getBitValue(configInfo[i].bitname);
+                                std::vector<Value *> v = getBitVariables(option,bit_value);
+                                std::vector<Value*> usagelist = confVariableMap[configInfo[i].configuration];
+                                usagelist.insert(usagelist.end(), v.begin(), v.end());
+                                confVariableMap[configInfo[i].configuration] = usagelist;
                             }
+                        } else {
+                            std::vector<Value *> v  = getVariables(inst,&(configInfo[i].offsetList));
+                            std::vector<Value*> usagelist = confVariableMap[configInfo[i].configuration];
+                            usagelist.insert(usagelist.end(), v.begin(), v.end());
+                            confVariableMap[configInfo[i].configuration] = usagelist;
                         }
                     }
-                    Instruction *inst = dyn_cast<Instruction>(instruction);
-                    if (inst->getName() == gVariableName) {
-                        std::vector<Value *> options = getVariables(inst,offsetList);
-                        for (auto option:options) {
-                            std::vector<Value *> v = getBitVariables(option,bit_value);
-                            variables.insert(variables.end(), v.begin(), v.end());
-                        }
-                    }
+                }
 
-                } else {
-                    Instruction *inst = dyn_cast<Instruction>(instruction);
-                    if (inst->getName() == gVariableName) {
-                        std::vector<Value *> v  = getVariables(inst,offsetList);
-                        variables.insert(variables.end(), v.begin(), v.end());
+
+                CallInst *callInst = dyn_cast<CallInst>(instruction);
+                if(!callInst)
+                    continue;
+                Function *calledFunction = callInst->getCalledFunction();
+                if (!calledFunction)
+                    continue;
+                if (calledFunction->getName() == "thd_test_options"){
+                    if (llvm::ConstantInt* CI = dyn_cast<llvm::ConstantInt>(callInst->getArgOperand(1))) {
+                        uint64_t bit_value = getBitValue(configInfo[1].bitname);
+                        if (CI->getSExtValue() & bit_value) {
+                            std::vector<Value*> usagelist = confVariableMap[configInfo[1].configuration];
+                            usagelist.push_back(callInst);
+                            confVariableMap[configInfo[1].configuration] = usagelist;
+                        }
                     }
                 }
             }
         }
 
-//        if (!variables.empty())
-//            errs() << "In function " << function->getName() << ", the variable is used in instruction: \n";
-//        for (auto variable: variables) {
-//            getVariableUse(variable);
-//        }
+        for (auto configUsage: confVariableMap) {
+            for (auto variable:configUsage.second)
+                getVariableUse(configUsage.first,variable);
+        }
 
-//        if (!callers.empty())
-//            errs() << "In function " << function->getName() << ", the test_option_bits is called with "<< bit_name << " : \n";
-//        for (auto caller:callers)
-//            errs() << *caller << "\n";
-
-        if (!variables.empty())
-            target_functions.push_back(&(*function));
-
-        variables.clear();
     }
+
 
     /*
      * Control flow analysis
@@ -132,36 +160,73 @@ bool DefUse::runOnModule(Module &M)  {
         }
         for(CallGraphNode::iterator j = i->second->begin(); j != i->second->end(); j++) {
             Function *func = j->second->getFunction();
-            auto f = std::find(target_functions.begin(), target_functions.end(), func);
-            if (func && f != target_functions.end())
-                parsed_log << "caller of " << func->getName().data() << " is " << i->second->getFunction()->getName().data() << "\n";
+            for(auto usageList =usage_map.begin(); usageList != usage_map.end(); usageList++) {
+                for(struct usage_info &usage: usageList->second){
+                    Function* function = usage.inst->getParent()->getParent();
+                    if (func == function)
+                        usage.callers.push_back(nodeFunction);
+                }
+            }
         }
     }
 
-    for (Function* function:target_functions) {
-        CallGraphNode *CGN = CG[function];
-        getCallee(function, &CG);
+    for(auto usageList =usage_map.begin(); usageList != usage_map.end(); usageList++) {
+        for(struct usage_info &usage: usageList->second){
+            Function* function = usage.inst->getParent()->getParent();
+            CallGraphNode *CGN = CG[function];
+            for (CallGraphNode::iterator ti = CGN->begin(); ti != CGN->end(); ++ti) {
+                if (Function *FI = ti->second->getFunction())
+                    usage.callees.push_back(FI);
+            }
+        }
     }
+
+
+    for(auto usageList:usage_map) {
+        outFile << "Configuration " << usageList.first << " is used in \n";
+        for(auto usage: usageList.second){
+            outFile << "In function "<< usage.inst->getParent()->getParent()->getName()<<  "; " <<*usage.inst << "\n";
+
+            for (auto callee:usage.callees ) {
+                outFile << "callee funciton" << callee->getName()<< "\n";
+            }
+            for(auto caller:usage.callers)
+                outFile << "caller function " << caller->getName() << "\n";
+        }
+    }
+    outFile.close();
     return false;
 }
 
-void DefUse::getCallee(Function* function, CallGraph* CG) {
-        CallGraphNode *CGN = (*CG)[function];
-        if (Function *F = CGN->getFunction())
-            parsed_log  << "In Function: '" << F->getName().data() << "' the variable is used\n";
-        else
-            parsed_log << "Call graph node <<null function>>";
+template<typename T>
+bool DefUse::getConfigurationInfo(T *variable, std::vector<int>* dst) {
+    int i = -1;
+    if (dyn_cast<LoadInst>(variable)) {
+        return false;
+    }
+    for (ConfigInfo cInfo: configInfo) {
+        i++;
+        if(!cInfo.offsetList.empty()) {
+            if (!isPointStructVariable(variable))
+                continue;
 
-        for (CallGraphNode::iterator ti = CGN->begin(); ti != CGN->end(); ++ti) {
-            parsed_log << "  CS<" << ti->first << "> calls ";
-            if (Function *FI = ti->second->getFunction())
-                parsed_log << "function '" << FI->getName().data() <<"'\n";
-            else
-                parsed_log << "external node\n";
+            StringRef structName = variable->getType()->getPointerElementType()->getStructName();
+            if (structName == cInfo.variableOrType)
+                dst->push_back(i);
+
+            continue;
         }
-        parsed_log << '\n';
 
+        if (cInfo.variableOrType == variable->getName())
+            dst->push_back(i);
+    }
+
+    if(dst->empty())
+        return false;
+    else
+        return true;
 }
+
 
 uint64_t DefUse::getBitValue(std::string bit_name) {
     for(auto bitInfo:handlerInfo) {
@@ -250,10 +315,10 @@ std::vector<Value *> DefUse::getBitVariables(T *variable, uint64_t bitvalue) {
 }
 
 /*
- * Find all the terget variable
+ * Find all the target variable
  */
 template<typename T>
-std::vector<Value *> DefUse::getVariables(T *variable,std::vector<int> offsetList) {
+std::vector<Value *> DefUse::getVariables(T *variable,std::vector<int>* offsetList) {
     std::vector<struct variable_wrapper> immediate_variable;
     std::vector<Value *> result;
     struct variable_wrapper init_variable;
@@ -266,7 +331,7 @@ std::vector<Value *> DefUse::getVariables(T *variable,std::vector<int> offsetLis
         struct variable_wrapper value = immediate_variable.back();
 
         immediate_variable.pop_back();
-        if (value.level == offsetList.size()) {
+        if (value.level == offsetList->size()) {
             result.push_back(value.variable);
             continue;
         }
@@ -276,8 +341,7 @@ std::vector<Value *> DefUse::getVariables(T *variable,std::vector<int> offsetLis
                 if (isa<GetElementPtrInst>(Inst)) {
                     GetElementPtrInst *getElementPtrInst = dyn_cast<GetElementPtrInst>(Inst);
                     ConstantInt *structOffset = dyn_cast<ConstantInt>(getElementPtrInst->getOperand(2));
-
-                    if (structOffset->getValue() == offsetList[value.level]) {
+                    if (structOffset && structOffset->getValue() == (*offsetList)[value.level]) {
                         struct variable_wrapper v;
                         v.variable = Inst;
                         v.level = value.level + 1;
@@ -296,29 +360,38 @@ std::vector<Value *> DefUse::getVariables(T *variable,std::vector<int> offsetLis
 * @param variable the target variable
 */
 template<typename T>
-void DefUse::getVariableUse(T *variable) {
+void DefUse::getVariableUse(std::string configuration, T *variable) {
     std::vector<Value *> immediate_variable;
     immediate_variable.push_back(variable);
+
 
     while (!immediate_variable.empty()) {
         Value *value = immediate_variable.back();
 
         immediate_variable.pop_back();
-        errs() << *value << "\n";
+//        std::vector<usage_info> usagelist = usage_map[configuration];
+//        struct usage_info usage;
+//        usage.inst = dyn_cast<Instruction>(value);
+//        usagelist.push_back(usage);
+//        usage_map[configuration] = usagelist;
         for (User *U : value->users()) {
-            Instruction *inst = dyn_cast<Instruction>(U);
-            if (StoreInst *storeInst = dyn_cast<StoreInst>(inst)) {
-                if (storeInst->getValueOperand() == value) {
-                    immediate_variable.push_back(storeInst->getPointerOperand());
-                }
+            if (Instruction *inst = dyn_cast<Instruction>(U)) {
+                if (StoreInst *storeInst = dyn_cast<StoreInst>(inst))
+                    if (storeInst->getValueOperand() == value)
+                        immediate_variable.push_back(storeInst->getPointerOperand());
+
+                if (LoadInst *loadInst = dyn_cast<LoadInst>(inst))
+                    if (loadInst->getPointerOperand() == value)
+                        immediate_variable.push_back(loadInst);
+
+                std::vector<usage_info> usagelist = usage_map[configuration];
+                struct usage_info usage;
+                usage.inst = inst;
+                usagelist.push_back(usage);
+                usage_map[configuration] = usagelist;
             }
 
-            if (LoadInst *loadInst = dyn_cast<LoadInst>(inst)) {
-                if (loadInst->getPointerOperand() == value) {
-                    immediate_variable.push_back(loadInst);
-                }
-            }
-            errs() << *inst << "\n";
+
         }
     }
 }
