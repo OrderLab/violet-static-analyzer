@@ -1,7 +1,11 @@
 //
 // Created by yigonghu on 11/29/19.
 //
+#include "llvm/Pass.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/Analysis/CallGraph.h"
 
+using namespace llvm;
 #ifndef STATIC_ANALYZER_DEFUSE_H
 #define STATIC_ANALYZER_DEFUSE_H
 
@@ -81,5 +85,33 @@ struct bitVariableInfo {
         {"no_autocommit",OPTION_NOT_AUTOCOMMIT},
         {"autocommit",OPTION_AUTOCOMMIT}
     };
+
+class DefUse : public ModulePass {
+    struct variable_wrapper {
+        Value *variable;
+        uint level;
+    };
+
+    template<typename T>
+    void getVariableUse(T *variable);
+    template<typename T>
+    bool isPointStructVariable(T *variable);
+    void
+    handleMemoryAcess(Instruction *inst, variable_wrapper *variable, std::vector<variable_wrapper> *immediate_variable);
+    template<typename T>
+    std::vector<Value *> getVariables(T *variable, std::vector<int> offsetList);
+    template<typename T>
+    std::vector<Value *> getBitVariables(T *variable, uint64_t bitvalue);
+    uint64_t getBitValue(std::string bit_name);
+    bool runOnModule(Module &M) override;
+    void getAnalysisUsage(AnalysisUsage &Info) const override;
+    void getCallee(Function* function,CallGraph* CG);
+
+public:
+    std::vector<Function *> target_functions;
+    static char ID; // Pass identification, replacement for typeid
+    DefUse() : ModulePass(ID) {}
+
+};
 
 #endif //STATIC_ANALYZER_DEFUSE_H
