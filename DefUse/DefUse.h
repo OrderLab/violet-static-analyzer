@@ -1,6 +1,7 @@
 //
 // Created by yigonghu on 11/29/19.
 //
+#include <fstream>
 #include "llvm/Pass.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/Analysis/CallGraph.h"
@@ -109,6 +110,7 @@ class DefUse : public ModulePass {
 
 public:
     std::vector<Function *> target_functions;
+    std::ofstream parsed_log;
     static char ID; // Pass identification, replacement for typeid
     DefUse() : ModulePass(ID) {}
 

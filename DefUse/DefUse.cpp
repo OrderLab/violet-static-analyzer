@@ -30,8 +30,9 @@ bool DefUse::runOnModule(Module &M)  {
     offsetList.push_back(14);
     offsetList.push_back(10);
     std::vector<Value *> variables;
-    std::vector<Value *> callers;
     uint64_t bit_value;
+
+    parsed_log.open("temp.log");
 
 
     errs() << "We want to trace the uses of variable: " << gVariableName << "\n";
@@ -78,7 +79,7 @@ bool DefUse::runOnModule(Module &M)  {
                             if (calledFunction->getName() == "thd_test_options"){
                                 if (llvm::ConstantInt* CI = dyn_cast<llvm::ConstantInt>(callInst->getArgOperand(1))) {
                                     if (CI->getSExtValue() & bit_value)
-                                        callers.push_back(callInst);
+                                        variables.push_back(callInst);
                                 }
 
                             }
@@ -114,28 +115,31 @@ bool DefUse::runOnModule(Module &M)  {
 //        for (auto caller:callers)
 //            errs() << *caller << "\n";
 
-        if (!callers.empty() || !variables.empty())
+        if (!variables.empty())
             target_functions.push_back(&(*function));
 
         variables.clear();
-        callers.clear();
     }
 
     /*
      * Control flow analysis
      */
-
     CallGraph &CG = getAnalysis<CallGraphWrapperPass>().getCallGraph();
-//    for (CallGraph::iterator i = CG.begin(); i != CG.end();i++) {
-//        for(CallGraphNode::iterator j = i->second->begin(); j != i->second->end(); j++){
-//            Function *func = j->second->getFunction();
-//
-//            if (func)
-//                errs() << "Yigong HU " << func->getName() <<"\n";
-//        }
-//    }
+    for (CallGraph::iterator i = CG.begin(); i != CG.end();i++) {
+        Function* nodeFunction = i->second->getFunction();
+        if (!nodeFunction) {
+            continue;
+        }
+        for(CallGraphNode::iterator j = i->second->begin(); j != i->second->end(); j++) {
+            Function *func = j->second->getFunction();
+            auto f = std::find(target_functions.begin(), target_functions.end(), func);
+            if (func && f != target_functions.end())
+                parsed_log << "caller of " << func->getName().data() << " is " << i->second->getFunction()->getName().data() << "\n";
+        }
+    }
 
     for (Function* function:target_functions) {
+        CallGraphNode *CGN = CG[function];
         getCallee(function, &CG);
     }
     return false;
@@ -144,18 +148,18 @@ bool DefUse::runOnModule(Module &M)  {
 void DefUse::getCallee(Function* function, CallGraph* CG) {
         CallGraphNode *CGN = (*CG)[function];
         if (Function *F = CGN->getFunction())
-            errs() << "In Function: '" << F->getName() << "' the variable is used ";
+            parsed_log  << "In Function: '" << F->getName().data() << "' the variable is used\n";
         else
-            errs() << "Call graph node <<null function>>";
+            parsed_log << "Call graph node <<null function>>";
 
         for (CallGraphNode::iterator ti = CGN->begin(); ti != CGN->end(); ++ti) {
-            errs() << "  CS<" << ti->first << "> calls ";
+            parsed_log << "  CS<" << ti->first << "> calls ";
             if (Function *FI = ti->second->getFunction())
-                errs() << "function '" << FI->getName() <<"'\n";
+                parsed_log << "function '" << FI->getName().data() <<"'\n";
             else
-                errs() << "external node\n";
+                parsed_log << "external node\n";
         }
-        errs() << '\n';
+        parsed_log << '\n';
 
 }
 
