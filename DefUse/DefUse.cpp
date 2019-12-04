@@ -28,126 +28,50 @@ bool DefUse::runOnModule(Module &M)  {
 
 
     // If the variable is a global variable, get the variable usage
-    for (auto &Global : M.getGlobalList()) {
-        std::map<std::string,std::vector<Value *>> confVariableMap;
-        std::vector<int> configurations;
-        if (getConfigurationInfo(&Global,&configurations)) {
-            while(!configurations.empty()) {
-                int i = configurations.back();
-                configurations.pop_back();
-                if (configInfo[i].bitname != "") {
-                    std::vector<Value *> options = getVariables(&Global,&(configInfo[i].offsetList));
-                    for (auto option:options) {
-                        uint64_t bit_value = getBitValue(configInfo[i].bitname);
-                        std::vector<Value *> v = getBitVariables(option,bit_value);
-                        std::vector<Value*> usagelist = confVariableMap[configInfo[i].configuration];
-                        usagelist.insert(usagelist.end(), v.begin(), v.end());
-                        confVariableMap[configInfo[i].configuration] = usagelist;
-                    }
-                } else {
-                    std::vector<Value *> v = getVariables(&Global,&(configInfo[i].offsetList));
-                    std::vector<Value*> usagelist = confVariableMap[configInfo[i].configuration];
-                    usagelist.insert(usagelist.end(), v.begin(), v.end());
-                    confVariableMap[configInfo[i].configuration] = usagelist;
-                }
-            }
-
-            for (auto configUsage: confVariableMap) {
-                for (auto variable:configUsage.second) {
-                    getVariableUse(configUsage.first,variable);
-                }
-            }
-        }
-
-    }
+    for (auto &Global : M.getGlobalList())
+        handleVariableUse(&Global);
 
     // If the variable is a local variable or an argument, get the variable usage
     for (Module::iterator function = M.begin(), moduleEnd = M.end();
          function != moduleEnd; function++) {
-        std::map<std::string,std::vector<Value *>> confVariableMap;
-        for (auto arg = function->arg_begin(); arg != function->arg_end(); arg++) {
-            std::vector<int> configurations;
-            if (getConfigurationInfo(&(*arg),&configurations)) {
-                while(!configurations.empty()) {
-                    int i = configurations.back();
-                    configurations.pop_back();
-                    if (configInfo[i].bitname != "") {
-                        std::vector<Value *> options = getVariables(&(*arg),&(configInfo[i].offsetList));
-                        for (auto option:options) {
-                            uint64_t bit_value = getBitValue(configInfo[i].bitname);
-                            std::vector<Value *> v = getBitVariables(option,bit_value);
-                            std::vector<Value*> usagelist = confVariableMap[configInfo[i].configuration];
-                            usagelist.insert(usagelist.end(), v.begin(), v.end());
-                            confVariableMap[configInfo[i].configuration] = usagelist;
-                        }
-                    } else {
-                        std::vector<Value *> v = getVariables(&(*arg),&(configInfo[i].offsetList));
-                        std::vector<Value*> usagelist = confVariableMap[configInfo[i].configuration];
-                        usagelist.insert(usagelist.end(), v.begin(), v.end());
-                        confVariableMap[configInfo[i].configuration] = usagelist;
-                    }
-                }
-
-            }
-        }
+        for (auto arg = function->arg_begin(); arg != function->arg_end(); arg++)
+                handleVariableUse(&(*arg));
 
         for (Function::iterator block = function->begin(), functionEnd = function->end();
              block != functionEnd; ++block) {
             for (BasicBlock::iterator instruction = block->begin(), blockEnd = block->end();
                  instruction != blockEnd; instruction++) {
                 Instruction *inst = dyn_cast<Instruction>(instruction);
-                if (!inst)
-                    continue;
-                std::vector<int> configurations;
-                if (getConfigurationInfo(inst,&configurations)) {
-                    while(!configurations.empty()) {
-                        int i = configurations.back();
-                        configurations.pop_back();
-                        if (configInfo[i].bitname != "") {
-                            std::vector<Value *> options = getVariables(inst,&(configInfo[i].offsetList));
-                            for (auto option:options) {
-                                uint64_t bit_value = getBitValue(configInfo[i].bitname);
-                                std::vector<Value *> v = getBitVariables(option,bit_value);
-                                std::vector<Value*> usagelist = confVariableMap[configInfo[i].configuration];
-                                usagelist.insert(usagelist.end(), v.begin(), v.end());
-                                confVariableMap[configInfo[i].configuration] = usagelist;
-                            }
-                        } else {
-                            std::vector<Value *> v  = getVariables(inst,&(configInfo[i].offsetList));
-                            std::vector<Value*> usagelist = confVariableMap[configInfo[i].configuration];
-                            usagelist.insert(usagelist.end(), v.begin(), v.end());
-                            confVariableMap[configInfo[i].configuration] = usagelist;
-                        }
-                    }
-                }
+                llvm::ConstantInt* CI;
+                CallInst *callInst;
+                Function *calledFunction;
+                handleVariableUse(inst);
 
-
-                CallInst *callInst = dyn_cast<CallInst>(instruction);
-                if(!callInst)
+                if (!isa<CallInst>(instruction))
                     continue;
-                Function *calledFunction = callInst->getCalledFunction();
+
+                callInst = dyn_cast<CallInst>(instruction);
+                calledFunction = callInst->getCalledFunction();
+
                 if (!calledFunction)
                     continue;
-                if (calledFunction->getName() == "thd_test_options"){
-                    if (llvm::ConstantInt* CI = dyn_cast<llvm::ConstantInt>(callInst->getArgOperand(1))) {
-                        uint64_t bit_value = getBitValue(configInfo[1].bitname);
-                        if (CI->getSExtValue() & bit_value) {
-                            std::vector<Value*> usagelist = confVariableMap[configInfo[1].configuration];
-                            usagelist.push_back(callInst);
-                            confVariableMap[configInfo[1].configuration] = usagelist;
+
+                if (calledFunction->getName() == "thd_test_options" && (CI = dyn_cast<llvm::ConstantInt>(callInst->getArgOperand(1)))) {
+                    uint64_t bit_value = getBitValue(configInfo[1].bitname);
+                    if (CI->getSExtValue() & bit_value) {
+                        std::map<std::string,std::vector<Value *>> confVariableMap;
+                        std::vector<Value*> usagelist = confVariableMap[configInfo[1].configuration];
+                        usagelist.push_back(callInst);
+                        confVariableMap[configInfo[1].configuration] = usagelist;
+                        for (auto configUsage: confVariableMap) {
+                            for (auto variable:configUsage.second)
+                                storeVariableUse(configUsage.first, variable);
                         }
                     }
                 }
             }
         }
-
-        for (auto configUsage: confVariableMap) {
-            for (auto variable:configUsage.second)
-                getVariableUse(configUsage.first,variable);
-        }
-
     }
-
 
     /*
      * Control flow analysis
@@ -181,7 +105,6 @@ bool DefUse::runOnModule(Module &M)  {
         }
     }
 
-
     for(auto usageList:usage_map) {
         outFile << "Configuration " << usageList.first << " is used in \n";
         for(auto usage: usageList.second){
@@ -196,6 +119,37 @@ bool DefUse::runOnModule(Module &M)  {
     }
     outFile.close();
     return false;
+}
+
+template<typename T>
+void DefUse::handleVariableUse(T *variable) {
+    std::map<std::string,std::vector<Value *>> confVariableMap;
+    std::vector<int> configurations;
+    if (getConfigurationInfo(variable,&configurations)) {
+        while(!configurations.empty()) {
+            int i = configurations.back();
+            configurations.pop_back();
+            if (configInfo[i].bitname != "") {
+                std::vector<Value *> options = getVariables(variable,&(configInfo[i].offsetList));
+                for (auto option:options) {
+                    uint64_t bit_value = getBitValue(configInfo[i].bitname);
+                    std::vector<Value *> v = getBitVariables(option,bit_value);
+                    std::vector<Value*> usagelist = confVariableMap[configInfo[i].configuration];
+                    usagelist.insert(usagelist.end(), v.begin(), v.end());
+                    confVariableMap[configInfo[i].configuration] = usagelist;
+                }
+            } else {
+                std::vector<Value *> v = getVariables(variable,&(configInfo[i].offsetList));
+                std::vector<Value*> usagelist = confVariableMap[configInfo[i].configuration];
+                usagelist.insert(usagelist.end(), v.begin(), v.end());
+                confVariableMap[configInfo[i].configuration] = usagelist;
+            }
+        }
+
+        for (auto configUsage: confVariableMap)
+            for (auto variable:configUsage.second)
+                storeVariableUse(configUsage.first, variable);
+    }
 }
 
 template<typename T>
@@ -360,7 +314,7 @@ std::vector<Value *> DefUse::getVariables(T *variable,std::vector<int>* offsetLi
 * @param variable the target variable
 */
 template<typename T>
-void DefUse::getVariableUse(std::string configuration, T *variable) {
+void DefUse::storeVariableUse(std::string configuration, T *variable) {
     std::vector<Value *> immediate_variable;
     immediate_variable.push_back(variable);
 
@@ -390,8 +344,6 @@ void DefUse::getVariableUse(std::string configuration, T *variable) {
                 usagelist.push_back(usage);
                 usage_map[configuration] = usagelist;
             }
-
-
         }
     }
 }

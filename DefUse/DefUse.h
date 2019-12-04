@@ -115,7 +115,7 @@ class DefUse : public ModulePass {
     }UsageInfo;
 
     template<typename T>
-    void getVariableUse(std::string configuration, T *variable);
+    void storeVariableUse(std::string configuration, T *variable);
     template<typename T>
     bool isPointStructVariable(T *variable);
     void
@@ -128,7 +128,9 @@ class DefUse : public ModulePass {
     bool runOnModule(Module &M) override;
     void getAnalysisUsage(AnalysisUsage &Info) const override;
     template<typename T>
-    bool getConfigurationInfo(T *variable, std::vector<int>* dst) ;
+    bool getConfigurationInfo(T *variable, std::vector<int>* dst);
+    template<typename T>
+    void handleVariableUse(T *variable);
 
 public:
     std::map<std::string,std::vector<usage_info>> usage_map;
