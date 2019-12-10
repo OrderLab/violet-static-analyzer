@@ -138,8 +138,7 @@ bool DefUse::runOnModule(Module &M)  {
                                     }
                                 }
                             }
-
-                }
+                        }
                 }
             }
         }
