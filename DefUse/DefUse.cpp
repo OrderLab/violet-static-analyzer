@@ -7,6 +7,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/Analysis/CallGraph.h"
+#include "llvm/Analysis/PostDominators.h"
 #include "llvm/ADT/SCCIterator.h"
 #include "llvm/Support/FileSystem.h"
 #include "DefUse.h"
@@ -25,6 +26,7 @@ bool DefUse::runOnModule(Module &M)  {
     std::string outName ("result.log");
     std::error_code OutErrorInfo;
     llvm::raw_fd_ostream outFile(llvm::StringRef(outName),OutErrorInfo, sys::fs::F_None);
+    llvm::raw_fd_ostream outFile2(llvm::StringRef("result2.log"),OutErrorInfo, sys::fs::F_None);
 
 
     // If the variable is a global variable, get the variable usage
@@ -77,47 +79,86 @@ bool DefUse::runOnModule(Module &M)  {
      * Control flow analysis
      */
     CallGraph &CG = getAnalysis<CallGraphWrapperPass>().getCallGraph();
-    for (CallGraph::iterator i = CG.begin(); i != CG.end();i++) {
-        Function* nodeFunction = i->second->getFunction();
+    for (CallGraph::iterator node = CG.begin(); node != CG.end();node++) {
+        Function* nodeFunction = node->second->getFunction();
         if (!nodeFunction) {
             continue;
         }
-        for(CallGraphNode::iterator j = i->second->begin(); j != i->second->end(); j++) {
-            Function *func = j->second->getFunction();
-            for(auto usageList =usage_map.begin(); usageList != usage_map.end(); usageList++) {
-                for(struct usage_info &usage: usageList->second){
-                    Function* function = usage.inst->getParent()->getParent();
-                    if (func == function)
-                        usage.callers.push_back(nodeFunction);
+        callerGraph[nodeFunction];
+        for (CallGraphNode::iterator callRecord = node->second->begin(); callRecord != node->second->end(); callRecord++) {
+            if (!callRecord->second->getFunction())
+                continue;
+            std::vector<CallerRecord>& callers = callerGraph[callRecord->second->getFunction()];
+            std::pair <Instruction*, Function*> record;
+            record.first = dyn_cast<Instruction>(callRecord->first);
+            record.second = nodeFunction;
+            callers.emplace_back(record);
+        }
+    }
+    for (auto& usages: configurationUsages) {
+        for (usage_info& usage:usages.second) {
+            std::vector<CallerRecord> callers;
+            std::vector<Function*> visitedCallers;
+            callers = callerGraph[usage.inst->getParent()->getParent()];
+            callers.emplace_back(usage.inst,usage.inst->getParent()->getParent());
+            while (!callers.empty()){
+                Function* f = callers.back().second;
+                Instruction *callInst = callers.back().first;
+                callers.pop_back();
+
+
+                if(std::find(visitedCallers.begin(),visitedCallers.end(),f) != visitedCallers.end())
+                    continue;
+
+                visitedCallers.push_back(f);
+                std::map<std::string,std::vector<Instruction*>> confFunctionMap = functionUsages[f];
+                callers.insert(callers.end(), callerGraph[f].begin(), callerGraph[f].end());
+                if (!confFunctionMap.empty()) {
+                    for (auto conf: confFunctionMap)
+                        for (auto u:conf.second){
+                            if (conf.first == usages.first)
+                                continue;
+                            PostDominatorTree* PostDT=new PostDominatorTree();
+                            PostDT->runOnFunction(*f);
+                            if (isa<CmpInst>(u) && !PostDT->dominates(callInst->getParent(),u->getParent())) {
+                                std::vector<BasicBlock *> succBlocks;
+                                succBlocks.push_back(callInst->getParent());
+                                bool flag = true;
+                                while (!succBlocks.empty() && flag) {
+                                    BasicBlock* succlock = succBlocks.back();
+//                                        succlock->printAsOperand(errs(), false);
+//                                        errs() << "\n";
+                                    succBlocks.pop_back();
+                                    for (pred_iterator PI = pred_begin(succlock), E = pred_end(succlock); PI != E; ++PI) {
+                                        succBlocks.push_back(*PI);
+                                        if (*PI == u->getParent() ) {
+                                            flag = false;
+                                            usage.relatedConfigurations.insert(conf.first);
+                                        }
+                                    }
+                                }
+                            }
+
+                }
                 }
             }
         }
     }
 
-    for(auto usageList =usage_map.begin(); usageList != usage_map.end(); usageList++) {
-        for(struct usage_info &usage: usageList->second){
-            Function* function = usage.inst->getParent()->getParent();
-            CallGraphNode *CGN = CG[function];
-            for (CallGraphNode::iterator ti = CGN->begin(); ti != CGN->end(); ++ti) {
-                if (Function *FI = ti->second->getFunction())
-                    usage.callees.push_back(FI);
-            }
-        }
-    }
 
-    for(auto usageList:usage_map) {
+    for(auto usageList:configurationUsages) {
         outFile << "Configuration " << usageList.first << " is used in \n";
         for(auto usage: usageList.second){
             outFile << "In function "<< usage.inst->getParent()->getParent()->getName()<<  "; " <<*usage.inst << "\n";
-
-            for (auto callee:usage.callees ) {
-                outFile << "callee funciton" << callee->getName()<< "\n";
-            }
-            for(auto caller:usage.callers)
-                outFile << "caller function " << caller->getName() << "\n";
+            if (!usage.relatedConfigurations.empty())
+                 outFile << "The related configurations are \n";
+            for (auto conf:usage.relatedConfigurations)
+               outFile << conf << "\n";
         }
     }
+
     outFile.close();
+    outFile2.close();
     return false;
 }
 
@@ -147,8 +188,8 @@ void DefUse::handleVariableUse(T *variable) {
         }
 
         for (auto configUsage: confVariableMap)
-            for (auto variable:configUsage.second)
-                storeVariableUse(configUsage.first, variable);
+            for (auto var:configUsage.second)
+                storeVariableUse(configUsage.first, var);
     }
 }
 
@@ -217,7 +258,7 @@ void DefUse::handleMemoryAcess(Instruction *inst, variable_wrapper *variable,  s
         }
     }
 
-    if (LoadInst * loadInst = dyn_cast<LoadInst>(inst)) {
+    if (LoadInst *loadInst = dyn_cast<LoadInst>(inst)) {
         if (loadInst->getPointerOperand() == variable->variable) {
             struct variable_wrapper v;
             v.variable = loadInst;
@@ -254,14 +295,12 @@ std::vector<Value *> DefUse::getBitVariables(T *variable, uint64_t bitvalue) {
 
             if (inst_use->getOpcode() == Instruction::And) {
                 if (llvm::ConstantInt *CI = dyn_cast<llvm::ConstantInt>(inst_use->getOperand(0)))
-                    if ((CI->getZExtValue() & bitvalue) && (CI->getSExtValue()  > 0)) {
+                    if ((CI->getZExtValue() & bitvalue) && (CI->getSExtValue()  > 0))
                         result.push_back(inst_use);
-                    }
 
                 if (llvm::ConstantInt *CI = dyn_cast<llvm::ConstantInt>(inst_use->getOperand(1)))
-                    if ((CI->getZExtValue() & bitvalue) && (CI->getSExtValue()  > 0)) {
+                    if ((CI->getZExtValue() & bitvalue) && (CI->getSExtValue()  > 0))
                           result.push_back(inst_use);
-                    }
             }
         }
     }
@@ -323,11 +362,11 @@ void DefUse::storeVariableUse(std::string configuration, T *variable) {
         Value *value = immediate_variable.back();
 
         immediate_variable.pop_back();
-//        std::vector<usage_info> usagelist = usage_map[configuration];
+//        std::vector<usage_info> usagelist = configurationUsages[configuration];
 //        struct usage_info usage;
 //        usage.inst = dyn_cast<Instruction>(value);
 //        usagelist.push_back(usage);
-//        usage_map[configuration] = usagelist;
+//        configurationUsages[configuration] = usagelist;
         for (User *U : value->users()) {
             if (Instruction *inst = dyn_cast<Instruction>(U)) {
                 if (StoreInst *storeInst = dyn_cast<StoreInst>(inst))
@@ -338,11 +377,16 @@ void DefUse::storeVariableUse(std::string configuration, T *variable) {
                     if (loadInst->getPointerOperand() == value)
                         immediate_variable.push_back(loadInst);
 
-                std::vector<usage_info> usagelist = usage_map[configuration];
-                struct usage_info usage;
+                std::vector<UsageInfo> usagelist = configurationUsages[configuration];
+                UsageInfo usage;
                 usage.inst = inst;
                 usagelist.push_back(usage);
-                usage_map[configuration] = usagelist;
+                configurationUsages[configuration] = usagelist;
+
+                Function* function = inst->getParent()->getParent();
+                std::map<std::string,std::vector<Instruction*>>& usages = functionUsages[function];
+                std::vector<Instruction*> &configUsages = usages[configuration];
+                configUsages.push_back(inst);
             }
         }
     }

@@ -5,6 +5,7 @@
 #include "llvm/Pass.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/Analysis/CallGraph.h"
+#include<set>
 
 using namespace llvm;
 #ifndef STATIC_ANALYZER_DEFUSE_H
@@ -110,9 +111,10 @@ class DefUse : public ModulePass {
 
     typedef struct usage_info {
         Instruction* inst;
-        std::vector<Function*> callers;
-        std::vector<Function*> callees;
+        std::set<std::string> relatedConfigurations;
     }UsageInfo;
+
+    typedef std::pair<Instruction*, Function*> CallerRecord;
 
     template<typename T>
     void storeVariableUse(std::string configuration, T *variable);
@@ -133,7 +135,9 @@ class DefUse : public ModulePass {
     void handleVariableUse(T *variable);
 
 public:
-    std::map<std::string,std::vector<usage_info>> usage_map;
+    std::map<std::string,std::vector<usage_info>> configurationUsages;
+    std::map<Function*, std::map<std::string,std::vector<Instruction*>>> functionUsages;
+    std::map<Function*, std::vector<CallerRecord>> callerGraph;
     static char ID; // Pass identification, replacement for typeid
     DefUse() : ModulePass(ID) {}
 
