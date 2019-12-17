@@ -82,7 +82,7 @@ struct bitVariableInfo {
 typedef struct configurationInfo {
     std::string configuration;
     std::string variableOrType; // variable name for no struct member; type name for struct memeber
-    std::string bitname;
+    int bit;
     std::vector<int> offsetList;
 }ConfigInfo;
 
@@ -96,11 +96,11 @@ static const struct bitVariableInfo handlerInfo[] ={
 };
 
 static ConfigInfo configInfo[] = {
-     {"","empty type","",{}},
-    {"autocommit","class.THD","no_autocommit",{14,10}},
-    {"query_cache_type","class.THD","",{14,54}},
-    {"innodb_flush_log_at_trx_commit","srv_flush_log_at_trx_commit","",{}},
-    {"innodb_flush_method","srv_unix_file_flush_method","",{}}
+     {"","empty type",-1,{}},
+     {"autocommit","class.THD",524288,{1488,72}},
+     {"query_cache_type","class.THD",-1,{1488,416}},
+     {"innodb_flush_log_at_trx_commit","flush_log_at_trx_commit",-1,{}},
+     {"innodb_flush_method","srv_unix_file_flush_method",-1,{}}
 };
 
 class DefUse : public ModulePass {
