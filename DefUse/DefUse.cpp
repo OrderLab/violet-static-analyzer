@@ -10,6 +10,7 @@
 #include "llvm/Analysis/PostDominators.h"
 #include "llvm/ADT/SCCIterator.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/IR/TypeFinder.h"
 #include "DefUse.h"
 #include <vector>
 #include <list>
@@ -24,12 +25,81 @@ using namespace llvm;
 bool DefUse::runOnModule(Module &M) {
   std::string outName("result.log");
   std::error_code OutErrorInfo;
-  llvm::raw_fd_ostream outFile(llvm::StringRef(outName), OutErrorInfo, sys::fs::F_None);
-  llvm::raw_fd_ostream outFile2(llvm::StringRef("result2.log"), OutErrorInfo, sys::fs::F_None);
+//  llvm::raw_fd_ostream outFile(llvm::StringRef(outName), OutErrorInfo, sys::fs::F_None);
+//  llvm::raw_fd_ostream outFile2(llvm::StringRef("result2.log"), OutErrorInfo, sys::fs::F_None);
+
+  for (auto *sty : M.getIdentifiedStructTypes()) {
+    if (sty->getName() == "struct.system_variables") {
+      unsigned length;
+      int rest = 64,flag = false;
+      for(auto element : sty->elements()) {
+        switch (element->getTypeID()) {
+          case llvm::CompositeType::VoidTyID:
+            sysvar_offsets.push_back(0);
+            break;
+          case llvm::CompositeType::DoubleTyID:
+            if (flag) {
+              int lastWidth = sysvar_offsets.back();
+              lastWidth += rest/8;
+              sysvar_offsets.pop_back();
+              sysvar_offsets.push_back(lastWidth);
+              rest = 64;
+              flag = false;
+            }
+            sysvar_offsets.push_back(sizeof(long));
+            break;
+          case llvm::CompositeType::IntegerTyID:
+            length = cast<IntegerType>(element)->getBitWidth();
+            //align to 64 bit
+            if (length != 64) {
+              flag = true;
+              if (rest < length)
+                rest = 64;
+              rest -= length;
+              sysvar_offsets.push_back(length/8);
+            } else {
+              if (flag) {
+                int lastWidth = sysvar_offsets.back();
+                lastWidth += rest/8;
+                sysvar_offsets.pop_back();
+                sysvar_offsets.push_back(lastWidth);
+                rest = 64;
+                flag = false;
+              }
+              sysvar_offsets.push_back(length/8);
+
+            }
+            break;
+          case llvm::CompositeType::PointerTyID:
+            if (flag) {
+              int lastWidth = sysvar_offsets.back();
+              lastWidth += rest/8;
+              sysvar_offsets.pop_back();
+              sysvar_offsets.push_back(lastWidth);
+              rest = 64;
+              flag = false;
+            }
+            sysvar_offsets.push_back(sizeof(char *));
+            break;
+          default:
+            sysvar_offsets.push_back(-1);
+        }
+      }
+    }
+  }
+  int lastWidth = sysvar_offsets.back();
+  if (lastWidth != 8) {
+    lastWidth = 8;
+    sysvar_offsets.pop_back();
+    sysvar_offsets.push_back(lastWidth);
+  }
+  recalculate_offset();
 
   // If the variable is a global variable, get the variable usage
-  for (auto &Global : M.getGlobalList())
+
+  for (auto &Global : M.getGlobalList()) {
     handleVariableUse(&Global);
+  }
 
   // If the variable is a local variable or an argument, get the variable usage
   for (Module::iterator function = M.begin(), moduleEnd = M.end();
@@ -58,7 +128,7 @@ bool DefUse::runOnModule(Module &M) {
 
         if (calledFunction->getName() == "thd_test_options"
             && (CI = dyn_cast<llvm::ConstantInt>(callInst->getArgOperand(1)))) {
-          if (CI->getSExtValue() & (configInfo[1].bit != -1)) {
+          if (CI->getSExtValue() & configInfo[1].bit ) {;
             std::map<std::string, std::vector<Value *>> confVariableMap;
             std::vector<Value *> usagelist = confVariableMap[configInfo[1].configuration];
             usagelist.push_back(callInst);
@@ -83,19 +153,33 @@ bool DefUse::runOnModule(Module &M) {
       continue;
     }
     callerGraph[nodeFunction];
+    calleeGraph[nodeFunction];
     for (CallGraphNode::iterator callRecord = node->second->begin(); callRecord != node->second->end(); callRecord++) {
       if (!callRecord->second->getFunction())
         continue;
+
+      // create caller graph
       std::vector<CallerRecord> &callers = callerGraph[callRecord->second->getFunction()];
       std::pair<Instruction *, Function *> record;
+
       record.first = dyn_cast<Instruction>(callRecord->first);
       record.second = nodeFunction;
       callers.emplace_back(record);
+
+      // Create callee graph
+      std::vector<CallerRecord> &callees = calleeGraph[nodeFunction];
+      std::pair<Instruction *, Function *> callee_record;
+      callee_record.first = dyn_cast<Instruction>(callRecord->first);
+      callee_record.second = callRecord->second->getFunction();
+      callees.emplace_back(callee_record);
     }
   }
 
+
+
   for (auto &usages: configurationUsages) {
-    for (usage_info &usage:usages.second) {
+    for (auto &usage:usages.second) {
+      // Get the prev configurations
       std::vector<CallerRecord> callers;
       std::vector<Function *> visitedCallers;
       callers = callerGraph[usage.inst->getParent()->getParent()];
@@ -104,13 +188,14 @@ bool DefUse::runOnModule(Module &M) {
         Function *f = callers.back().second;
         Instruction *callInst = callers.back().first;
         callers.pop_back();
-
         if (std::find(visitedCallers.begin(), visitedCallers.end(), f) != visitedCallers.end())
           continue;
 
         visitedCallers.push_back(f);
-        std::map<std::string, std::vector<Instruction *>> confFunctionMap = functionUsages[f];
         callers.insert(callers.end(), callerGraph[f].begin(), callerGraph[f].end());
+
+
+        std::map<std::string, std::vector<Instruction *>> confFunctionMap = functionUsages[f];
         if (!confFunctionMap.empty()) {
           for (auto conf: confFunctionMap)
             for (auto u:conf.second) {
@@ -120,16 +205,25 @@ bool DefUse::runOnModule(Module &M) {
               PostDT->runOnFunction(*f);
               if (isa<CmpInst>(u) && !PostDT->dominates(callInst->getParent(), u->getParent())) {
                 std::vector<BasicBlock *> predBlocks;
+                std::vector<BasicBlock *> visitedBlocks;
                 predBlocks.push_back(callInst->getParent());
                 bool flag = true;
                 while (!predBlocks.empty() && flag) {
-                  BasicBlock *succlock = predBlocks.back();
+                  BasicBlock *predlock = predBlocks.back();
                   predBlocks.pop_back();
-                  for (pred_iterator PI = pred_begin(succlock), E = pred_end(succlock); PI != E; ++PI) {
+                  if (std::find(visitedBlocks.begin(), visitedBlocks.end(), predlock) != visitedBlocks.end())
+                    continue;
+                  visitedBlocks.push_back(predlock);
+                  for (pred_iterator PI = pred_begin(predlock), E = pred_end(predlock); PI != E; ++PI) {
                     predBlocks.push_back(*PI);
                     if (*PI == u->getParent()) {
                       flag = false;
-                      usage.relatedConfigurations.insert(conf.first);
+//                      if (usages.first == "autocommit") {
+//                        errs() << "configuration " << conf.first << "\n";
+//                        errs() << "Function " << u->getParent()->getParent()->getName() << "\n";
+//                      }
+//                      usage.prev_functions.insert(callInst->getParent()->getParent());
+                      usage.prev_configurations.insert(conf.first);
                     }
                   }
                 }
@@ -137,24 +231,93 @@ bool DefUse::runOnModule(Module &M) {
             }
         }
       }
+
+      // Get the succ configurations
+      std::vector<CallerRecord> callees;
+      std::vector<Function *> visitedCallees;
+      callees = calleeGraph[usage.inst->getParent()->getParent()];
+      while (!callees.empty()) {
+        Function *f = callees.back().second;
+        callees.pop_back();
+        if (std::find(visitedCallees.begin(), visitedCallees.end(), f) != visitedCallees.end())
+          continue;
+
+        visitedCallees.push_back(f);
+        std::map<std::string, std::vector<Instruction *>> confFunctionMap = functionUsages[f];
+        callees.insert(callees.end(), calleeGraph[f].begin(), calleeGraph[f].end());
+        if (!confFunctionMap.empty()) {
+          for (auto conf: confFunctionMap) {
+            if (conf.first != usages.first)
+                 usage.succ_configurations.insert(conf.first);
+          }
+
+        }
+      }
     }
   }
 
-  for (auto usageList:configurationUsages) {
-    outFile << "Configuration " << usageList.first << " is used in \n";
-    for (auto usage: usageList.second) {
-      outFile << "In function " << usage.inst->getParent()->getParent()->getName() << "; " << *usage.inst << "\n";
-      if (!usage.relatedConfigurations.empty())
-        outFile << "The related configurations are \n";
-      for (auto conf:usage.relatedConfigurations)
-        outFile << conf << "\n";
-    }
-  }
 
-  outFile.close();
-  outFile2.close();
+//  for (auto usage_list:configurationUsages) {
+//    std::vector<std::string> visited_configuration;
+////    outFile2 << "Configuration " << usage_list.first << " is used in \n";
+//    outFile << "{ configuration: " << usage_list.first << ", prev configurations: [";
+//    for (auto usage: usage_list.second) {
+////      outFile2 << "In function " << usage.inst->getParent()->getParent()->getName() << "; " << *usage.inst << "\n";
+//      if (!usage.prev_configurations.empty())
+////        outFile2 << "The related configurations are \n";
+//      for (std::string conf:usage.prev_configurations) {
+////        outFile2 << conf << ",";
+//        if (std::find(visited_configuration.begin(),visited_configuration.end(),conf)== visited_configuration.end()) {
+//            outFile << conf<< ",";
+//            visited_configuration.push_back(conf);
+//        }
+//      }
+////      outFile2 << "\n";
+////      for (auto function:usage.prev_functions) {
+////        outFile2 << function->getName() << ",";
+////      }
+////      outFile2 << "\n";
+//    }
+//
+//    outFile << "]},\n";
+//  }
+//
+//  for (auto usage_list:configurationUsages) {
+//    std::vector<std::string> visited_configuration;
+//    outFile << "{ configuration: " << usage_list.first << ", succ configurations: [";
+//    for (auto usage: usage_list.second) {
+//      for (std::string conf:usage.succ_configurations) {
+//        if (std::find(visited_configuration.begin(),visited_configuration.end(),conf)== visited_configuration.end()) {
+//          outFile << conf<< ",";
+//          visited_configuration.push_back(conf);
+//        }
+//
+//      }
+//    }
+//    outFile << "]},\n";
+//  }
+////  outFile2.close();
+//  outFile.close();
   return false;
 }
+
+void DefUse::recalculate_offset(){
+  for (auto &config:configInfo){
+    if (config.offsetList.size() <= 1)
+      continue;
+    int offset = config.offsetList.back();
+    int index = 0;
+    for(auto element:sysvar_offsets) {
+     if (offset < element)
+       break;
+     index++;
+     offset -= element;
+    }
+    config.offsetList.pop_back();
+    config.offsetList.push_back(index);
+  }
+}
+
 
 template<typename T>
 void DefUse::handleVariableUse(T *variable) {
@@ -186,6 +349,9 @@ void DefUse::handleVariableUse(T *variable) {
   }
 }
 
+/*
+ * Return ture for getting the configuration info
+ */
 template<typename T>
 bool DefUse::getConfigurationInfo(T *variable, std::vector<int> *dst) {
   int i = -1;
@@ -204,6 +370,7 @@ bool DefUse::getConfigurationInfo(T *variable, std::vector<int> *dst) {
 
       continue;
     }
+
 
     if (cInfo.variableOrType == variable->getName())
       dst->push_back(i);
@@ -253,7 +420,7 @@ void DefUse::handleMemoryAcess(Instruction *inst,
 }
 
 template<typename T>
-std::vector<Value *> DefUse::getBitVariables(T *variable, uint64_t bitvalue) {
+std::vector<Value *> DefUse::getBitVariables(T *variable, long long bitvalue) {
   std::vector<Value *> immediate_variable;
   std::vector<Value *> result;
   immediate_variable.push_back(variable);
@@ -337,21 +504,29 @@ std::vector<Value *> DefUse::getVariables(T *variable, std::vector<int> *offsetL
 template<typename T>
 void DefUse::storeVariableUse(std::string configuration, T *variable) {
   std::vector<Value *> immediate_variable;
+  std::vector<Value *> visited_variable;
   immediate_variable.push_back(variable);
 
   while (!immediate_variable.empty()) {
     Value *value = immediate_variable.back();
-
+    visited_variable.push_back(value);
     immediate_variable.pop_back();
     for (User *U : value->users()) {
+
       if (Instruction *inst = dyn_cast<Instruction>(U)) {
         if (StoreInst *storeInst = dyn_cast<StoreInst>(inst))
-          if (storeInst->getValueOperand() == value)
-            immediate_variable.push_back(storeInst->getPointerOperand());
+          if (storeInst->getValueOperand() == value) {
+            if(std::find(visited_variable.begin(),visited_variable.end(),storeInst->getPointerOperand())== visited_variable.end())
+              immediate_variable.push_back(storeInst->getPointerOperand());
+          }
+
 
         if (LoadInst *loadInst = dyn_cast<LoadInst>(inst))
-          if (loadInst->getPointerOperand() == value)
-            immediate_variable.push_back(loadInst);
+          if (loadInst->getPointerOperand() == value) {
+            if(std::find(visited_variable.begin(),visited_variable.end(),loadInst)== visited_variable.end())
+              immediate_variable.push_back(loadInst);
+          }
+
 
         std::vector<UsageInfo> usagelist = configurationUsages[configuration];
         UsageInfo usage;
