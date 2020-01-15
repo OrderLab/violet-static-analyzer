@@ -21,7 +21,8 @@ namespace {
             }
 
             if (callee->second->getFunction()->getName() == "_ZN3THD30in_multi_stmt_transaction_modeEv") {
-              (*outFile)<< "Yigong Hu\n";
+              (*outFile) << "Level " << level << ": "<< callee->second->getFunction()->getName() << "\n";
+              errs() << "Yigong Hu\n";
               return;
             }
 
@@ -44,7 +45,7 @@ namespace {
             if (!nodeFunction) {
               continue;
             }
-            if (nodeFunction->getName() == "srv_master_thread") {
+            if (nodeFunction->getName() == "_ZN13sp_instr_stmt7executeEP3THDPj") {
               findCallee(&outFile,node->second.get(),0);
             }
 

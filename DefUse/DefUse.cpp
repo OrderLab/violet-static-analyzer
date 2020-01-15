@@ -25,7 +25,7 @@ using namespace llvm;
 bool DefUse::runOnModule(Module &M) {
   std::string outName("result.log");
   std::error_code OutErrorInfo;
-//  llvm::raw_fd_ostream outFile(llvm::StringRef(outName), OutErrorInfo, sys::fs::F_None);
+  llvm::raw_fd_ostream outFile(llvm::StringRef(outName), OutErrorInfo, sys::fs::F_None);
 //  llvm::raw_fd_ostream outFile2(llvm::StringRef("result2.log"), OutErrorInfo, sys::fs::F_None);
 
   for (auto *sty : M.getIdentifiedStructTypes()) {
@@ -203,26 +203,29 @@ bool DefUse::runOnModule(Module &M) {
                 continue;
               PostDominatorTree *PostDT = new PostDominatorTree();
               PostDT->runOnFunction(*f);
+//              errs() << *(callInst->getParent()) << "\n";
+//              errs() << *(u->getParent()) << "\n";
+//              errs() << PostDT->dominates(callInst->getParent(), u->getParent()) << "\n";
               if (isa<CmpInst>(u) && !PostDT->dominates(callInst->getParent(), u->getParent())) {
-                std::vector<BasicBlock *> predBlocks;
+                std::vector<BasicBlock *> prevBlocks;
                 std::vector<BasicBlock *> visitedBlocks;
-                predBlocks.push_back(callInst->getParent());
+                prevBlocks.push_back(callInst->getParent());
                 bool flag = true;
-                while (!predBlocks.empty() && flag) {
-                  BasicBlock *predlock = predBlocks.back();
-                  predBlocks.pop_back();
+                while (!prevBlocks.empty() && flag) {
+                  BasicBlock *predlock = prevBlocks.back();
+                  prevBlocks.pop_back();
                   if (std::find(visitedBlocks.begin(), visitedBlocks.end(), predlock) != visitedBlocks.end())
                     continue;
                   visitedBlocks.push_back(predlock);
                   for (pred_iterator PI = pred_begin(predlock), E = pred_end(predlock); PI != E; ++PI) {
-                    predBlocks.push_back(*PI);
+                    if (*PI != u->getParent()) {
+                      if (!PostDT->dominates(callInst->getParent(), *PI))
+                        continue;
+                    }
+                    prevBlocks.push_back(*PI);
                     if (*PI == u->getParent()) {
                       flag = false;
-//                      if (usages.first == "autocommit") {
-//                        errs() << "configuration " << conf.first << "\n";
-//                        errs() << "Function " << u->getParent()->getParent()->getName() << "\n";
-//                      }
-//                      usage.prev_functions.insert(callInst->getParent()->getParent());
+                      usage.prev_functions.insert(callInst->getParent()->getParent());
                       usage.prev_configurations.insert(conf.first);
                     }
                   }
@@ -257,47 +260,47 @@ bool DefUse::runOnModule(Module &M) {
   }
 
 
-//  for (auto usage_list:configurationUsages) {
-//    std::vector<std::string> visited_configuration;
-////    outFile2 << "Configuration " << usage_list.first << " is used in \n";
-//    outFile << "{ configuration: " << usage_list.first << ", prev configurations: [";
-//    for (auto usage: usage_list.second) {
-////      outFile2 << "In function " << usage.inst->getParent()->getParent()->getName() << "; " << *usage.inst << "\n";
-//      if (!usage.prev_configurations.empty())
-////        outFile2 << "The related configurations are \n";
-//      for (std::string conf:usage.prev_configurations) {
-////        outFile2 << conf << ",";
-//        if (std::find(visited_configuration.begin(),visited_configuration.end(),conf)== visited_configuration.end()) {
-//            outFile << conf<< ",";
-//            visited_configuration.push_back(conf);
-//        }
+  for (auto usage_list:configurationUsages) {
+    std::vector<std::string> visited_configuration;
+//    outFile2 << "Configuration " << usage_list.first << " is used in \n";
+    outFile << "{ configuration: " << usage_list.first << ", prev configurations: [";
+    for (auto usage: usage_list.second) {
+//      outFile2 << "In function " << usage.inst->getParent()->getParent()->getName() << "; " << *usage.inst << "\n";
+      if (!usage.prev_configurations.empty())
+//        outFile2 << "The related configurations are \n";
+      for (std::string conf:usage.prev_configurations) {
+//        outFile2 << conf << ",";
+        if (std::find(visited_configuration.begin(),visited_configuration.end(),conf)== visited_configuration.end()) {
+            outFile << conf<< ",";
+            visited_configuration.push_back(conf);
+        }
+      }
+//      outFile2 << "\n";
+//      for (auto function:usage.prev_functions) {
+//        outFile2 << function->getName() << ",";
 //      }
-////      outFile2 << "\n";
-////      for (auto function:usage.prev_functions) {
-////        outFile2 << function->getName() << ",";
-////      }
-////      outFile2 << "\n";
-//    }
-//
-//    outFile << "]},\n";
-//  }
-//
-//  for (auto usage_list:configurationUsages) {
-//    std::vector<std::string> visited_configuration;
-//    outFile << "{ configuration: " << usage_list.first << ", succ configurations: [";
-//    for (auto usage: usage_list.second) {
-//      for (std::string conf:usage.succ_configurations) {
-//        if (std::find(visited_configuration.begin(),visited_configuration.end(),conf)== visited_configuration.end()) {
-//          outFile << conf<< ",";
-//          visited_configuration.push_back(conf);
-//        }
-//
-//      }
-//    }
-//    outFile << "]},\n";
-//  }
-////  outFile2.close();
-//  outFile.close();
+//      outFile2 << "\n";
+    }
+
+    outFile << "]}\n";
+  }
+
+  for (auto usage_list:configurationUsages) {
+    std::vector<std::string> visited_configuration;
+    outFile << "{ configuration: " << usage_list.first << ", succ configurations: [";
+    for (auto usage: usage_list.second) {
+      for (std::string conf:usage.succ_configurations) {
+        if (std::find(visited_configuration.begin(),visited_configuration.end(),conf)== visited_configuration.end()) {
+          outFile << conf<< ",";
+          visited_configuration.push_back(conf);
+        }
+
+      }
+    }
+    outFile << "]},\n";
+  }
+//  outFile2.close();
+  outFile.close();
   return false;
 }
 
