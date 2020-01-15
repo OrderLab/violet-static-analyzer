@@ -122,7 +122,6 @@ bool DefUse::runOnModule(Module &M) {
 
         callInst = dyn_cast<CallInst>(instruction);
         calledFunction = callInst->getCalledFunction();
-
         if (!calledFunction)
           continue;
 
@@ -175,26 +174,28 @@ bool DefUse::runOnModule(Module &M) {
     }
   }
 
-
-
   for (auto &usages: configurationUsages) {
     for (auto &usage:usages.second) {
       // Get the prev configurations
       std::vector<CallerRecord> callers;
       std::vector<Function *> visitedCallers;
+
+
       callers = callerGraph[usage.inst->getParent()->getParent()];
       callers.emplace_back(usage.inst, usage.inst->getParent()->getParent());
       while (!callers.empty()) {
         Function *f = callers.back().second;
         Instruction *callInst = callers.back().first;
         callers.pop_back();
+
+        if(f->getName() == "_ZL13fix_log_stateP7sys_varP3THD13enum_var_type" || f->getName() == "_ZN6LOGGER20activate_log_handlerEP3THDj")
+          continue;
+
         if (std::find(visitedCallers.begin(), visitedCallers.end(), f) != visitedCallers.end())
           continue;
 
         visitedCallers.push_back(f);
         callers.insert(callers.end(), callerGraph[f].begin(), callerGraph[f].end());
-
-
         std::map<std::string, std::vector<Instruction *>> confFunctionMap = functionUsages[f];
         if (!confFunctionMap.empty()) {
           for (auto conf: confFunctionMap)
@@ -203,9 +204,6 @@ bool DefUse::runOnModule(Module &M) {
                 continue;
               PostDominatorTree *PostDT = new PostDominatorTree();
               PostDT->runOnFunction(*f);
-//              errs() << *(callInst->getParent()) << "\n";
-//              errs() << *(u->getParent()) << "\n";
-//              errs() << PostDT->dominates(callInst->getParent(), u->getParent()) << "\n";
               if (isa<CmpInst>(u) && !PostDT->dominates(callInst->getParent(), u->getParent())) {
                 std::vector<BasicBlock *> prevBlocks;
                 std::vector<BasicBlock *> visitedBlocks;
@@ -266,9 +264,9 @@ bool DefUse::runOnModule(Module &M) {
     outFile << "{ configuration: " << usage_list.first << ", prev configurations: [";
     for (auto usage: usage_list.second) {
 //      outFile2 << "In function " << usage.inst->getParent()->getParent()->getName() << "; " << *usage.inst << "\n";
-      if (!usage.prev_configurations.empty())
+//      if (!usage.prev_configurations.empty())
 //        outFile2 << "The related configurations are \n";
-      for (std::string conf:usage.prev_configurations) {
+//      for (std::string conf:usage.prev_configurations) {
 //        outFile2 << conf << ",";
         if (std::find(visited_configuration.begin(),visited_configuration.end(),conf)== visited_configuration.end()) {
             outFile << conf<< ",";
