@@ -23,7 +23,7 @@ static ConfigInfo configInfo[] = {
     {"application_name","application_name"},
     {"archive_command","XLogArchiveCommand"},
     {"archive_mode","XLogArchiveMode"},
-//    {"archive_timeout","XLogArchiveTimeout"},
+    {"archive_timeout","XLogArchiveTimeout"},
 //    {"array_nulls","Array_nulls"},
 //    {"authentication_timeout","AuthenticationTimeout"},
 //    {"autovacuum","autovacuum_start_daemon"},
@@ -49,16 +49,16 @@ static ConfigInfo configInfo[] = {
 //    {"bonjour_name","bonjour_name"},
 //    {"bytea_output","bytea_output"},
 //    {"check_function_bodies","check_function_bodies"},
-//    {"checkpoint_completion_target","CheckPointCompletionTarget"},
+    {"checkpoint_completion_target","CheckPointCompletionTarget"},
 //    {"checkpoint_flush_after","checkpoint_flush_after"},
-//    {"checkpoint_timeout","CheckPointTimeout"},
+    {"checkpoint_timeout","CheckPointTimeout"},
 //    {"checkpoint_warning","CheckPointWarning"},
 //    {"client_encoding","client_encoding_string"},
 //    {"client_min_messages","client_min_messages"},
 //    {"cluster_name","cluster_name"},
-//    {"commit_delay","CommitDelay"},
-//    {"commit_siblings","CommitSiblings"},
-//    {"config_file","ConfigFileName"},
+    {"commit_delay","CommitDelay"},
+    {"commit_siblings","CommitSiblings"},
+    {"config_file","ConfigFileName"},
 //    {"constraint_exclusion","constraint_exclusion"},
 //    {"cpu_index_tuple_cost","cpu_index_tuple_cost"},
 //    {"cpu_operator_cost","cpu_operator_cost"},
@@ -69,7 +69,7 @@ static ConfigInfo configInfo[] = {
 //    {"data_directory_mode","data_directory_mode"},
 //    {"DateStyle","datestyle_string"},
 //    {"db_user_namespace","Db_user_namespace"},
-//    {"deadlock_timeout","DeadlockTimeout"},
+    {"deadlock_timeout","DeadlockTimeout"},
 //    {"debug_assertions","assert_enabled"},
 //    {"debug_pretty_print","Debug_pretty_print"},
 //    {"debug_print_parse","Debug_print_parse"},
@@ -105,7 +105,7 @@ static ConfigInfo configInfo[] = {
 //    {"enable_tidscan","enable_tidscan"},
 //    {"escape_string_warning","escape_string_warning"},
 //    {"event_source","event_source"},
-//    {"exit_on_error","ExitOnAnyError"},
+    {"exit_on_error","ExitOnAnyError"},
 //    {"external_pid_file","external_pid_file"},
 //    {"extra_float_digits","extra_float_digits"},
 //    {"force_parallel_mode","force_parallel_mode"},
@@ -154,7 +154,7 @@ static ConfigInfo configInfo[] = {
 //    {"listen_addresses","ListenAddresses"},
 //    {"lo_compat_privileges","lo_compat_privileges"},
 //    {"local_preload_libraries","local_preload_libraries_string"},
-//    {"lock_timeout","LockTimeout"},
+    {"lock_timeout","LockTimeout"},
 //    {"log_autovacuum_min_duration","Log_autovacuum_min_duration"},
 //    {"log_checkpoints","log_checkpoints"},
 //    {"log_connections","Log_connections"},
@@ -322,6 +322,7 @@ class PostgresqlAnalyzer : public ModulePass {
     Instruction* inst;
     std::set<std::string> prev_configurations;
     std::set<Function *> prev_functions;
+    std::set<Function *> succ_functions;
     std::set<std::string> succ_configurations;
   }UsageInfo;
 
