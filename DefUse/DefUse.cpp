@@ -26,7 +26,7 @@ bool DefUse::runOnModule(Module &M) {
   std::string outName("result.log");
   std::error_code OutErrorInfo;
   llvm::raw_fd_ostream outFile(llvm::StringRef(outName), OutErrorInfo, sys::fs::F_None);
-//  llvm::raw_fd_ostream outFile2(llvm::StringRef("result2.log"), OutErrorInfo, sys::fs::F_None);
+  llvm::raw_fd_ostream outFile2(llvm::StringRef("result2.log"), OutErrorInfo, sys::fs::F_None);
 
   for (auto *sty : M.getIdentifiedStructTypes()) {
     if (sty->getName() == "struct.system_variables") {
@@ -266,7 +266,7 @@ bool DefUse::runOnModule(Module &M) {
 //      outFile2 << "In function " << usage.inst->getParent()->getParent()->getName() << "; " << *usage.inst << "\n";
 //      if (!usage.prev_configurations.empty())
 //        outFile2 << "The related configurations are \n";
-//      for (std::string conf:usage.prev_configurations) {
+      for (std::string conf:usage.prev_configurations) {
 //        outFile2 << conf << ",";
         if (std::find(visited_configuration.begin(),visited_configuration.end(),conf)== visited_configuration.end()) {
             outFile << conf<< ",";
@@ -285,19 +285,28 @@ bool DefUse::runOnModule(Module &M) {
 
   for (auto usage_list:configurationUsages) {
     std::vector<std::string> visited_configuration;
+    outFile2 << "Configuration " << usage_list.first << " is used in \n";
     outFile << "{ configuration: " << usage_list.first << ", succ configurations: [";
     for (auto usage: usage_list.second) {
+      outFile2 << "In function " << usage.inst->getParent()->getParent()->getName() << "; " << *usage.inst << "\n";
+      if (!usage.prev_configurations.empty())
+        outFile2 << "The related configurations are \n";
       for (std::string conf:usage.succ_configurations) {
+        outFile2 << conf << ",";
         if (std::find(visited_configuration.begin(),visited_configuration.end(),conf)== visited_configuration.end()) {
           outFile << conf<< ",";
           visited_configuration.push_back(conf);
         }
-
+        outFile2 << "\n";
+      for (auto function:usage.prev_functions) {
+        outFile2 << function->getName() << ",";
+      }
+      outFile2 << "\n";
       }
     }
     outFile << "]},\n";
   }
-//  outFile2.close();
+  outFile2.close();
   outFile.close();
   return false;
 }
@@ -366,14 +375,14 @@ bool DefUse::getConfigurationInfo(T *variable, std::vector<int> *dst) {
         continue;
 
       StringRef structName = variable->getType()->getPointerElementType()->getStructName();
-      if (structName == cInfo.variableOrType)
+      if (structName == cInfo.name)
         dst->push_back(i);
 
       continue;
     }
 
 
-    if (cInfo.variableOrType == variable->getName())
+    if (cInfo.name == variable->getName())
       dst->push_back(i);
   }
 
