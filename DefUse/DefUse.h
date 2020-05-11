@@ -310,6 +310,7 @@ class DefUse : public ModulePass {
         Instruction* inst;
         std::set<std::string> prev_configurations;
         std::set<Function *> prev_functions;
+      std::set<Function *> succ_functions;
         std::set<std::string> succ_configurations;
     }UsageInfo;
 

@@ -238,21 +238,85 @@ bool DefUse::runOnModule(Module &M) {
       std::vector<Function *> visitedCallees;
       callees = calleeGraph[usage.inst->getParent()->getParent()];
       while (!callees.empty()) {
-        Function *f = callees.back().second;
+        CallerRecord calleeRecord = callees.back();
         callees.pop_back();
-        if (std::find(visitedCallees.begin(), visitedCallees.end(), f) != visitedCallees.end())
+
+        if (std::find(visitedCallees.begin(), visitedCallees.end(), calleeRecord.first->getParent()->getParent()) != visitedCallees.end())
           continue;
 
-        visitedCallees.push_back(f);
-        std::map<std::string, std::vector<Instruction *>> confFunctionMap = functionUsages[f];
-        callees.insert(callees.end(), calleeGraph[f].begin(), calleeGraph[f].end());
-        if (!confFunctionMap.empty()) {
-          for (auto conf: confFunctionMap) {
-            if (conf.first != usages.first)
-                 usage.succ_configurations.insert(conf.first);
+        PostDominatorTree *PostDT = new PostDominatorTree();
+        PostDT->runOnFunction(*usage.inst->getParent()->getParent());
+        if (isa<CmpInst>(usage.inst) && !PostDT->dominates(calleeRecord.first->getParent(), usage.inst->getParent())) {
+          std::vector<BasicBlock *> prevBlocks;
+          std::vector<BasicBlock *> visitedBlocks;
+          prevBlocks.push_back(calleeRecord.first->getParent());
+          bool flag = true;
+          while (!prevBlocks.empty() && flag) {
+            BasicBlock *predlock = prevBlocks.back();
+            prevBlocks.pop_back();
+            if (std::find(visitedBlocks.begin(), visitedBlocks.end(), predlock) != visitedBlocks.end())
+              continue;
+            visitedBlocks.push_back(predlock);
+            for (pred_iterator PI = pred_begin(predlock), E = pred_end(predlock); PI != E; ++PI) {
+              if (*PI != usage.inst->getParent()) {
+                if (!PostDT->dominates(calleeRecord.first->getParent(), *PI))
+                  continue;
+              }
+              prevBlocks.push_back(*PI);
+              if (*PI == usage.inst->getParent()) {
+                flag = false;
+                Function *callee = calleeRecord.first->getParent()->getParent();
+                usage.succ_functions.insert(callee);
+                visitedCallees.push_back(calleeRecord.first->getParent()->getParent());
+                std::map<std::string, std::vector<Instruction *>> confFunctionMap = functionUsages[callee];
+//                callees.insert(callees.end(), calleeGraph[callee].begin(), calleeGraph[callee].end());
+                if (!confFunctionMap.empty()) {
+                  for (auto conf: confFunctionMap) {
+                    if (conf.first != usages.first)
+                      usage.succ_configurations.insert(conf.first);
+                  }
+                }
+                continue;
+              }
+            }
           }
-
         }
+      }
+
+      Function *function = usage.inst->getParent()->getParent();
+      std::map<std::string, std::vector<Instruction *>> confFunctionMap = functionUsages[function];
+      if (!confFunctionMap.empty()) {
+        for (auto conf: confFunctionMap)
+          for (auto u:conf.second) {
+            if (conf.first == usages.first)
+              continue;
+            PostDominatorTree *PostDT = new PostDominatorTree();
+            PostDT->runOnFunction(*function);
+            if (!PostDT->dominates(u->getParent(),usage.inst->getParent())) {
+              std::vector<BasicBlock *> prevBlocks;
+              std::vector<BasicBlock *> visitedBlocks;
+              prevBlocks.push_back(u->getParent());
+              bool flag = true;
+              while (!prevBlocks.empty() && flag) {
+                BasicBlock *predlock = prevBlocks.back();
+                prevBlocks.pop_back();
+                if (std::find(visitedBlocks.begin(), visitedBlocks.end(), predlock) != visitedBlocks.end())
+                  continue;
+                visitedBlocks.push_back(predlock);
+                for (pred_iterator PI = pred_begin(predlock), E = pred_end(predlock); PI != E; ++PI) {
+                  if (*PI != u->getParent()) {
+                    if (!PostDT->dominates(u->getParent(), *PI))
+                      continue;
+                  }
+                  prevBlocks.push_back(*PI);
+                  if (*PI == u->getParent()) {
+                    flag = false;
+                    usage.succ_configurations.insert(conf.first);
+                  }
+                }
+              }
+            }
+          }
       }
     }
   }
@@ -285,28 +349,28 @@ bool DefUse::runOnModule(Module &M) {
 
   for (auto usage_list:configurationUsages) {
     std::vector<std::string> visited_configuration;
-    outFile2 << "Configuration " << usage_list.first << " is used in \n";
+//    outFile2 << "Configuration " << usage_list.first << " is used in \n";
     outFile << "{ configuration: " << usage_list.first << ", succ configurations: [";
     for (auto usage: usage_list.second) {
-      outFile2 << "In function " << usage.inst->getParent()->getParent()->getName() << "; " << *usage.inst << "\n";
-      if (!usage.prev_configurations.empty())
-        outFile2 << "The related configurations are \n";
+//      outFile2 << "In function " << usage.inst->getParent()->getParent()->getName() << "; " << *usage.inst << "\n";
+//      if (!usage.prev_configurations.empty())
+//        outFile2 << "The related configurations are \n";
       for (std::string conf:usage.succ_configurations) {
-        outFile2 << conf << ",";
+//        outFile2 << conf << ",";
         if (std::find(visited_configuration.begin(),visited_configuration.end(),conf)== visited_configuration.end()) {
           outFile << conf<< ",";
           visited_configuration.push_back(conf);
         }
-        outFile2 << "\n";
-      for (auto function:usage.prev_functions) {
-        outFile2 << function->getName() << ",";
-      }
-      outFile2 << "\n";
+//        outFile2 << "\n";
+//      for (auto function:usage.prev_functions) {
+//        outFile2 << function->getName() << ",";
+//      }
+//      outFile2 << "\n";
       }
     }
     outFile << "]},\n";
   }
-  outFile2.close();
+//  outFile2.close();
   outFile.close();
   return false;
 }
