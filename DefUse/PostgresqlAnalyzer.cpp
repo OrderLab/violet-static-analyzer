@@ -335,7 +335,6 @@ std::vector<Value *> PostgresqlAnalyzer::getVariables(T *variable) {
     for (User *U : variable->users()) {
       if (Instruction *Inst = dyn_cast<Instruction>(U)) {
         result.push_back(Inst);
-//        errs() << "inst " << *Inst << "\n";
       }
     }
 

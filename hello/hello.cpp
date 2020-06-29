@@ -19,13 +19,10 @@ namespace {
             if (!callee->second->getFunction()) {
               continue;
             }
-
-            if (callee->second->getFunction()->getName() == "_ZN3THD30in_multi_stmt_transaction_modeEv") {
+            if (callee->second->getFunction()->getName() == "SyncRepWaitForLSN") {
               (*outFile) << "Level " << level << ": "<< callee->second->getFunction()->getName() << "\n";
-              errs() << "Yigong Hu\n";
               return;
             }
-
 
             if (level < 10) {
               (*outFile) << "Level " << level << ": "<< callee->second->getFunction()->getName() << "\n";
@@ -37,7 +34,6 @@ namespace {
         bool runOnModule(Module &M) override {
           std::error_code OutErrorInfo;
           llvm::raw_fd_ostream outFile(llvm::StringRef("test.log"), OutErrorInfo, sys::fs::F_None);
-
           CallGraph &CG = getAnalysis<CallGraphWrapperPass>().getCallGraph();
           CallGraphNode* start_function,*end_function;
           for (CallGraph::iterator node = CG.begin(); node != CG.end(); node++) {
@@ -45,10 +41,9 @@ namespace {
             if (!nodeFunction) {
               continue;
             }
-            if (nodeFunction->getName() == "_ZN13sp_instr_stmt7executeEP3THDPj") {
+            if (nodeFunction->getName() == "CheckPWChallengeAuth") {
               findCallee(&outFile,node->second.get(),0);
             }
-
           }
             outFile.close();
             return false;

@@ -1,3 +1,7 @@
+//
+// Created by yigonghu on 6/22/20.
+//
+
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Value.h"
@@ -11,7 +15,7 @@
 #include "llvm/ADT/SCCIterator.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/IR/TypeFinder.h"
-#include "DefUse.h"
+#include "httpanalyzer.h"
 #include <vector>
 #include <list>
 #include <queue>
@@ -22,11 +26,13 @@ using namespace llvm;
 /*
  * Perform the static analysis to each module,
  */
-bool DefUse::runOnModule(Module &M) {
-  std::string outName("result.log");
+bool HttpAnalyzer::runOnModule(Module &M) {
+  std::string outName("http_result.log");
   std::error_code OutErrorInfo;
   llvm::raw_fd_ostream outFile(llvm::StringRef(outName), OutErrorInfo, sys::fs::F_None);
   llvm::raw_fd_ostream outFile2(llvm::StringRef("result2.log"), OutErrorInfo, sys::fs::F_None);
+
+  // If the variable is a global variable, get the variable usage
 
   for (auto *sty : M.getIdentifiedStructTypes()) {
     if (sty->getName() == "struct.system_variables") {
@@ -87,15 +93,7 @@ bool DefUse::runOnModule(Module &M) {
       }
     }
   }
-  int lastWidth = sysvar_offsets.back();
-  if (lastWidth != 8) {
-    lastWidth = 8;
-    sysvar_offsets.pop_back();
-    sysvar_offsets.push_back(lastWidth);
-  }
-  recalculate_offset();
 
-  // If the variable is a global variable, get the variable usage
 
   for (auto &Global : M.getGlobalList()) {
     handleVariableUse(&Global);
@@ -104,43 +102,20 @@ bool DefUse::runOnModule(Module &M) {
   // If the variable is a local variable or an argument, get the variable usage
   for (Module::iterator function = M.begin(), moduleEnd = M.end();
        function != moduleEnd; function++) {
-    for (auto arg = function->arg_begin(); arg != function->arg_end(); arg++)
-      handleVariableUse(&(*arg));
+    for (auto arg = function->arg_begin(); arg != function->arg_end(); arg++) {
+        handleVariableUse(&(*arg));
+    }
 
     for (Function::iterator block = function->begin(), functionEnd = function->end();
          block != functionEnd; ++block) {
       for (BasicBlock::iterator instruction = block->begin(), blockEnd = block->end();
            instruction != blockEnd; instruction++) {
         Instruction *inst = dyn_cast<Instruction>(instruction);
-        llvm::ConstantInt *CI;
-        CallInst *callInst;
-        Function *calledFunction;
         handleVariableUse(inst);
-
-        if (!isa<CallInst>(instruction))
-          continue;
-
-        callInst = dyn_cast<CallInst>(instruction);
-        calledFunction = callInst->getCalledFunction();
-        if (!calledFunction)
-          continue;
-
-        if (calledFunction->getName() == "thd_test_options"
-            && (CI = dyn_cast<llvm::ConstantInt>(callInst->getArgOperand(1)))) {
-          if (CI->getSExtValue() & configInfo[1].bit ) {;
-            std::map<std::string, std::vector<Value *>> confVariableMap;
-            std::vector<Value *> usagelist = confVariableMap[configInfo[1].configuration];
-            usagelist.push_back(callInst);
-            confVariableMap[configInfo[1].configuration] = usagelist;
-            for (auto configUsage: confVariableMap) {
-              for (auto variable:configUsage.second)
-                storeVariableUse(configUsage.first, variable);
-            }
-          }
-        }
       }
     }
   }
+
 
   /*
    * Control flow analysis
@@ -167,7 +142,7 @@ bool DefUse::runOnModule(Module &M) {
 
       // Create callee graph
       std::vector<CallerRecord> &callees = calleeGraph[nodeFunction];
-      std::pair<Instruction *, Function *> callee_record;
+      CallerRecord callee_record;
       callee_record.first = dyn_cast<Instruction>(callRecord->first);
       callee_record.second = callRecord->second->getFunction();
       callees.emplace_back(callee_record);
@@ -180,16 +155,12 @@ bool DefUse::runOnModule(Module &M) {
       std::vector<CallerRecord> callers;
       std::vector<Function *> visitedCallers;
 
-
       callers = callerGraph[usage.inst->getParent()->getParent()];
       callers.emplace_back(usage.inst, usage.inst->getParent()->getParent());
       while (!callers.empty()) {
         Function *f = callers.back().second;
         Instruction *callInst = callers.back().first;
         callers.pop_back();
-
-        if(f->getName() == "_ZL13fix_log_stateP7sys_varP3THD13enum_var_type" || f->getName() == "_ZN6LOGGER20activate_log_handlerEP3THDj")
-          continue;
 
         if (std::find(visitedCallers.begin(), visitedCallers.end(), f) != visitedCallers.end())
           continue;
@@ -233,11 +204,11 @@ bool DefUse::runOnModule(Module &M) {
         }
       }
 
+
       // Get the succ configurations
       std::vector<CallerRecord> callees;
       std::vector<Function *> visitedCallees;
       callees = calleeGraph[usage.inst->getParent()->getParent()];
-      errs() << "check one succ configuration \n";
       while (!callees.empty()) {
         CallerRecord calleeRecord = callees.back();
         callees.pop_back();
@@ -267,7 +238,7 @@ bool DefUse::runOnModule(Module &M) {
               if (*PI == usage.inst->getParent()) {
                 flag = false;
                 Function *callee = calleeRecord.first->getParent()->getParent();
-//                usage.succ_functions.insert(callee);
+                usage.succ_functions.insert(callee);
                 visitedCallees.push_back(calleeRecord.first->getParent()->getParent());
                 std::map<std::string, std::vector<Instruction *>> confFunctionMap = functionUsages[callee];
 //                callees.insert(callees.end(), calleeGraph[callee].begin(), calleeGraph[callee].end());
@@ -283,7 +254,7 @@ bool DefUse::runOnModule(Module &M) {
           }
         }
       }
-      errs() << "finish checking function \n";
+
       Function *function = usage.inst->getParent()->getParent();
       std::map<std::string, std::vector<Instruction *>> confFunctionMap = functionUsages[function];
       if (!confFunctionMap.empty()) {
@@ -319,109 +290,79 @@ bool DefUse::runOnModule(Module &M) {
             }
           }
       }
-      errs() << "finish checking one succ configuration\n";
     }
   }
-
 
   for (auto usage_list:configurationUsages) {
     std::vector<std::string> visited_configuration;
 //    outFile2 << "Configuration " << usage_list.first << " is used in \n";
-    outFile << "{ configuration: " << usage_list.first << ", prev configurations: [";
+    outFile << "{ configuration: " << getConfigurationName(usage_list.first) << ", prev configurations: [";
     for (auto usage: usage_list.second) {
 //      outFile2 << "In function " << usage.inst->getParent()->getParent()->getName() << "; " << *usage.inst << "\n";
 //      if (!usage.prev_configurations.empty())
 //        outFile2 << "The related configurations are \n";
       for (std::string conf:usage.prev_configurations) {
 //        outFile2 << conf << ",";
-        if (std::find(visited_configuration.begin(),visited_configuration.end(),conf)== visited_configuration.end()) {
-            outFile << conf<< ",";
-            visited_configuration.push_back(conf);
+        if (std::find(visited_configuration.begin(), visited_configuration.end(), conf)
+            == visited_configuration.end()) {
+          outFile << getConfigurationName(conf) << ",";
+          visited_configuration.push_back(conf);
         }
       }
 //      outFile2 << "\n";
 //      for (auto function:usage.prev_functions) {
 //        outFile2 << function->getName() << ",";
 //      }
-//      outFile2 << "\n";
     }
-
     outFile << "]}\n";
   }
 
   for (auto usage_list:configurationUsages) {
     std::vector<std::string> visited_configuration;
-//    outFile2 << "Configuration " << usage_list.first << " is used in \n";
-    outFile << "{ configuration: " << usage_list.first << ", succ configurations: [";
+    outFile2 << "Configuration " << usage_list.first << " is used in \n";
+    outFile << "{ configuration: " << getConfigurationName(usage_list.first) << ", succ configurations: [";
     for (auto usage: usage_list.second) {
-//      outFile2 << "In function " << usage.inst->getParent()->getParent()->getName() << "; " << *usage.inst << "\n";
-//      if (!usage.prev_configurations.empty())
-//        outFile2 << "The related configurations are \n";
+      outFile2 << "In function " << usage.inst->getParent()->getParent()->getName() << "; " << *usage.inst << "\n";
+      if (!usage.prev_configurations.empty())
+        outFile2 << "The related configurations are \n";
       for (std::string conf:usage.succ_configurations) {
-//        outFile2 << conf << ",";
-        if (std::find(visited_configuration.begin(),visited_configuration.end(),conf)== visited_configuration.end()) {
-          outFile << conf<< ",";
+        outFile2 << getConfigurationName(conf) << ",";
+        if (std::find(visited_configuration.begin(), visited_configuration.end(), conf)
+            == visited_configuration.end()) {
+          outFile << getConfigurationName(conf) << ",";
           visited_configuration.push_back(conf);
         }
-//        outFile2 << "\n";
-//      for (auto function:usage.prev_functions) {
-//        outFile2 << function->getName() << ",";
-//      }
-//      outFile2 << "\n";
+      }
+      outFile2 << "\n";
+      for (auto function:usage.succ_functions) {
+        outFile2 << function->getName() << ",";
       }
     }
     outFile << "]},\n";
   }
-//  outFile2.close();
+
+  outFile2.close();
   outFile.close();
   return false;
+
 }
 
-void DefUse::recalculate_offset(){
-  for (auto &config:configInfo){
-    if (config.offsetList.size() <= 1)
-      continue;
-    int offset = config.offsetList.back();
-    int index = 0;
-    for(auto element:sysvar_offsets) {
-     if (offset < element)
-       break;
-     index++;
-     offset -= element;
-    }
-    config.offsetList.pop_back();
-    config.offsetList.push_back(index);
+
+std::string HttpAnalyzer::getConfigurationName(std::string config_variable) {
+  for (ConfigInfo cInfo: configInfo) {
+    if (cInfo.name == config_variable)
+      return cInfo.configuration;
   }
-}
 
+  return NULL;
+}
 
 template<typename T>
-void DefUse::handleVariableUse(T *variable) {
-  std::map<std::string, std::vector<Value *>> confVariableMap;
-  std::vector<int> configurations;
-  if (getConfigurationInfo(variable, &configurations)) {
-    while (!configurations.empty()) {
-      int i = configurations.back();
-      configurations.pop_back();
-      if (configInfo[i].bit != -1) {
-        std::vector<Value *> options = getVariables(variable, &(configInfo[i].offsetList));
-        for (auto option:options) {
-          std::vector<Value *> v = getBitVariables(option, configInfo[i].bit);
-          std::vector<Value *> usagelist = confVariableMap[configInfo[i].configuration];
-          usagelist.insert(usagelist.end(), v.begin(), v.end());
-          confVariableMap[configInfo[i].configuration] = usagelist;
-        }
-      } else {
-        std::vector<Value *> v = getVariables(variable, &(configInfo[i].offsetList));
-        std::vector<Value *> usagelist = confVariableMap[configInfo[i].configuration];
-        usagelist.insert(usagelist.end(), v.begin(), v.end());
-        confVariableMap[configInfo[i].configuration] = usagelist;
-      }
-    }
-
-    for (auto configUsage: confVariableMap)
-      for (auto var:configUsage.second)
-        storeVariableUse(configUsage.first, var);
+void HttpAnalyzer::handleVariableUse(T *variable) {
+  if (getConfigurationInfo(variable)) {
+    std::vector<Value *> variables = getVariables(variable);
+    for (auto var: variables)
+      storeVariableUse(variable->getName(), var);
   }
 }
 
@@ -429,147 +370,32 @@ void DefUse::handleVariableUse(T *variable) {
  * Return ture for getting the configuration info
  */
 template<typename T>
-bool DefUse::getConfigurationInfo(T *variable, std::vector<int> *dst) {
+int HttpAnalyzer::getConfigurationInfo(T *variable) {
   int i = -1;
   if (dyn_cast<LoadInst>(variable)) {
     return false;
   }
   for (ConfigInfo cInfo: configInfo) {
     i++;
-    if (!cInfo.offsetList.empty()) {
-      if (!isPointStructVariable(variable))
-        continue;
-
-      StringRef structName = variable->getType()->getPointerElementType()->getStructName();
-      if (structName == cInfo.name)
-        dst->push_back(i);
-
-      continue;
-    }
-
-
     if (cInfo.name == variable->getName())
-      dst->push_back(i);
+      return i;
   }
 
-  if (dst->empty())
-    return false;
-  else
-    return true;
-}
-
-template<typename T>
-bool DefUse::isPointStructVariable(T *variable) {
-  Type *pointerElementTpye;
-
-  if (!variable->getType()->isPointerTy())
-    return variable->getType()->isStructTy();
-
-  pointerElementTpye = variable->getType()->getPointerElementType();
-  return pointerElementTpye->isStructTy();
-}
-
-/*
- * If the variable is load to other variable, also check the usage of the other variable
- */
-void DefUse::handleMemoryAcess(Instruction *inst,
-                               variable_wrapper *variable,
-                               std::vector<variable_wrapper> *immediate_variable) {
-  if (StoreInst *storeInst = dyn_cast<StoreInst>(inst)) {
-    if (storeInst->getValueOperand() == variable->variable) {
-      struct variable_wrapper v;
-      v.variable = storeInst->getPointerOperand();
-      v.level = variable->level;
-      immediate_variable->push_back(v);
-    }
-  }
-
-  if (LoadInst *loadInst = dyn_cast<LoadInst>(inst)) {
-    if (loadInst->getPointerOperand() == variable->variable) {
-      struct variable_wrapper v;
-      v.variable = loadInst;
-      v.level = variable->level;
-      immediate_variable->push_back(v);
-    }
-  }
-  return;
-}
-
-template<typename T>
-std::vector<Value *> DefUse::getBitVariables(T *variable, long long bitvalue) {
-  std::vector<Value *> immediate_variable;
-  std::vector<Value *> result;
-  immediate_variable.push_back(variable);
-
-  while (!immediate_variable.empty()) {
-    Value *value = immediate_variable.back();
-
-    immediate_variable.pop_back();
-    for (auto use: value->users()) {
-      Instruction *inst_use = dyn_cast<Instruction>(use);
-      if (StoreInst *storeInst = dyn_cast<StoreInst>(inst_use)) {
-        if (storeInst->getValueOperand() == value) {
-          immediate_variable.push_back(storeInst->getPointerOperand());
-        }
-      }
-
-      if (LoadInst *loadInst = dyn_cast<LoadInst>(inst_use)) {
-        if (loadInst->getPointerOperand() == value) {
-          immediate_variable.push_back(loadInst);
-        }
-      }
-
-      if (inst_use->getOpcode() == Instruction::And) {
-        if (llvm::ConstantInt *CI = dyn_cast<llvm::ConstantInt>(inst_use->getOperand(0)))
-          if ((CI->getZExtValue() & bitvalue) && (CI->getSExtValue() > 0))
-            result.push_back(inst_use);
-
-        if (llvm::ConstantInt *CI = dyn_cast<llvm::ConstantInt>(inst_use->getOperand(1)))
-          if ((CI->getZExtValue() & bitvalue) && (CI->getSExtValue() > 0))
-            result.push_back(inst_use);
-      }
-    }
-  }
-  return result;
+  return 0;
 }
 
 /*
  * Find all the target variable
  */
 template<typename T>
-std::vector<Value *> DefUse::getVariables(T *variable, std::vector<int> *offsetList) {
-  std::vector<struct variable_wrapper> immediate_variable;
+std::vector<Value *> HttpAnalyzer::getVariables(T *variable) {
   std::vector<Value *> result;
-  struct variable_wrapper init_variable;
-
-  init_variable.variable = variable;
-  init_variable.level = 0;
-  immediate_variable.push_back(init_variable);
-
-  while (!immediate_variable.empty()) {
-    struct variable_wrapper value = immediate_variable.back();
-
-    immediate_variable.pop_back();
-    if (value.level == offsetList->size()) {
-      result.push_back(value.variable);
-      continue;
-    }
-    for (User *U : value.variable->users()) {
-      if (Instruction *Inst = dyn_cast<Instruction>(U)) {
-        handleMemoryAcess(Inst, &value, &immediate_variable);
-        if (isa<GetElementPtrInst>(Inst)) {
-          GetElementPtrInst *getElementPtrInst = dyn_cast<GetElementPtrInst>(Inst);
-          ConstantInt *structOffset = dyn_cast<ConstantInt>(getElementPtrInst->getOperand(2));
-          if (structOffset && structOffset->getValue() == (*offsetList)[value.level]) {
-            struct variable_wrapper v;
-            v.variable = Inst;
-            v.level = value.level + 1;
-            immediate_variable.push_back(v);
-          }
-        }
-      }
+  for (User *U : variable->users()) {
+    if (Instruction *Inst = dyn_cast<Instruction>(U)) {
+      result.push_back(Inst);
     }
   }
+
   return result;
 }
 
@@ -578,7 +404,7 @@ std::vector<Value *> DefUse::getVariables(T *variable, std::vector<int> *offsetL
 * @param variable the target variable
 */
 template<typename T>
-void DefUse::storeVariableUse(std::string configuration, T *variable) {
+void HttpAnalyzer::storeVariableUse(std::string configuration, T *variable) {
   std::vector<Value *> immediate_variable;
   std::vector<Value *> visited_variable;
   immediate_variable.push_back(variable);
@@ -588,7 +414,6 @@ void DefUse::storeVariableUse(std::string configuration, T *variable) {
     visited_variable.push_back(value);
     immediate_variable.pop_back();
     for (User *U : value->users()) {
-
       if (Instruction *inst = dyn_cast<Instruction>(U)) {
         if (StoreInst *storeInst = dyn_cast<StoreInst>(inst))
           if (storeInst->getValueOperand() == value) {
@@ -596,13 +421,11 @@ void DefUse::storeVariableUse(std::string configuration, T *variable) {
               immediate_variable.push_back(storeInst->getPointerOperand());
           }
 
-
         if (LoadInst *loadInst = dyn_cast<LoadInst>(inst))
           if (loadInst->getPointerOperand() == value) {
             if(std::find(visited_variable.begin(),visited_variable.end(),loadInst)== visited_variable.end())
               immediate_variable.push_back(loadInst);
           }
-
 
         std::vector<UsageInfo> usagelist = configurationUsages[configuration];
         UsageInfo usage;
@@ -619,9 +442,9 @@ void DefUse::storeVariableUse(std::string configuration, T *variable) {
   }
 }
 
-void DefUse::getAnalysisUsage(AnalysisUsage &AU) const {
+void HttpAnalyzer::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addRequired<llvm::CallGraphWrapperPass>();
 }
 
-char DefUse::ID = 0;
-static RegisterPass<DefUse> X("defuse", "This is def-use Pass");
+char HttpAnalyzer::ID = 0;
+static RegisterPass<HttpAnalyzer> X("http", "This is http analyzer");
