@@ -316,8 +316,6 @@ static ConfigInfo configInfo[] = {
 };
 
 class PostgresqlAnalyzer : public ModulePass {
-
-
   typedef struct usage_info {
     Instruction* inst;
     std::set<std::string> prev_configurations;

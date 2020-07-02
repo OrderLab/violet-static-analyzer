@@ -156,7 +156,7 @@ static ConfigInfo configInfo[] = {
     {"query_cache_limit","query_cache",-1,{}},
     {"query_cache_min_res_unit","query_cache_min_res_unit",-1,{}},
     {"query_cache_type","class.THD",-1,{14,416}},
-    {"query_cache_type","struct.system_variables",-1,{416}},
+    {"query_cache_type","struct.system_variables",-1,{54}},
     {"query_cache_wlock_invalidate","class.THD",-1,{14,458}},
     {"query_cache_wlock_invalidate","struct.system_variables",-1,{458}},
     {"secure_auth","opt_secure_auth",-1,{}},

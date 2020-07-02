@@ -389,4 +389,4 @@ void PostgresqlAnalyzer::getAnalysisUsage(AnalysisUsage &AU) const {
 }
 
 char PostgresqlAnalyzer::ID = 0;
-static RegisterPass<PostgresqlAnalyzer> X("postgresql_config", "This is def-use Pass");
+static RegisterPass<PostgresqlAnalyzer> X("postgres", "This is def-use Pass");

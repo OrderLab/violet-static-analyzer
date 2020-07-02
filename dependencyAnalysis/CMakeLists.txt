@@ -1,0 +1,7 @@
+add_library(defuse MODULE DefUse.cpp DefUse.h dependencyanalyzer.h dependencyanalyzer.cpp)
+add_library(postgresql MODULE PostgresqlAnalyzer.cpp PostgresqlAnalyzer.h)
+add_library(map MODULE configurationMap.cpp configurationMap.cpp)
+add_library(httpmap MODULE httpmap.cpp httpmap.cpp)
+add_library(squid MODULE squidanalyzer.cpp squidanalyzer.h)
+add_library(http MODULE httpanalyzer.cpp httpanalyzer.h)
+add_library(dependencyAnalyzer MODULE dependencyanalyzer.cpp dependencyanalyzer.h)

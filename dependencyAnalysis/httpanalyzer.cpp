@@ -1,7 +1,6 @@
 //
 // Created by yigonghu on 6/22/20.
 //
-
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Value.h"
@@ -15,7 +14,7 @@
 #include "llvm/ADT/SCCIterator.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/IR/TypeFinder.h"
-#include "squidanalyzer.h"
+#include "httpanalyzer.h"
 #include <vector>
 #include <list>
 #include <queue>
@@ -23,11 +22,9 @@
 
 using namespace llvm;
 
-/*
- * Perform the static analysis to each module,
- */
-bool SquidAnalyzer::runOnModule(Module &M) {
-  std::string outName("squid_result.log");
+
+bool HttpAnalyzer::runOnModule(Module &M) {
+  std::string outName("httpd_result.log");
   std::error_code OutErrorInfo;
   llvm::raw_fd_ostream outFile(llvm::StringRef(outName), OutErrorInfo, sys::fs::F_None);
   llvm::raw_fd_ostream outFile2(llvm::StringRef("result2.log"), OutErrorInfo, sys::fs::F_None);
@@ -46,7 +43,7 @@ bool SquidAnalyzer::runOnModule(Module &M) {
         continue;
     }
     for (auto arg = function->arg_begin(); arg != function->arg_end(); arg++) {
-
+      handleVariableUse(&(*arg));
     }
 
     for (Function::iterator block = function->begin(), functionEnd = function->end();
@@ -269,14 +266,14 @@ bool SquidAnalyzer::runOnModule(Module &M) {
 //      outFile2 << "In function " << usage.inst->getParent()->getParent()->getName() << "; " << *usage.inst << "\n";
       if (!usage.prev_configurations.empty())
 //        outFile2 << "The related configurations are \n";
-      for (std::string conf:usage.succ_configurations) {
+        for (std::string conf:usage.succ_configurations) {
 //        outFile2 << conf << ",";
-        if (std::find(visited_configuration.begin(), visited_configuration.end(), conf)
-            == visited_configuration.end()) {
-          outFile << conf << ",";
-          visited_configuration.push_back(conf);
+          if (std::find(visited_configuration.begin(), visited_configuration.end(), conf)
+              == visited_configuration.end()) {
+            outFile << conf << ",";
+            visited_configuration.push_back(conf);
+          }
         }
-      }
 //      outFile2 << "\n";
 //      for (auto function:usage.succ_functions) {
 //        outFile2 << function->getName() << ",";
@@ -292,7 +289,7 @@ bool SquidAnalyzer::runOnModule(Module &M) {
 }
 
 template<typename T>
-void SquidAnalyzer::handleVariableUse(T *variable) {
+void HttpAnalyzer::handleVariableUse(T *variable) {
   std::vector<int> config_index_list;
   std::map<std::string, std::vector<Value *>> confVariableMap;
   if (getConfigurationInfo(variable, &config_index_list)) {
@@ -315,7 +312,7 @@ void SquidAnalyzer::handleVariableUse(T *variable) {
  * Return ture for getting the configuration info
  */
 template<typename T>
-bool SquidAnalyzer::getConfigurationInfo(T *variable, std::vector<int> *dst) {
+bool HttpAnalyzer::getConfigurationInfo(T *variable, std::vector<int> *dst) {
   int i = -1;
   if (dyn_cast<LoadInst>(variable)) {
     return false;
@@ -345,7 +342,7 @@ bool SquidAnalyzer::getConfigurationInfo(T *variable, std::vector<int> *dst) {
 }
 
 template<typename T>
-bool SquidAnalyzer::isPointStructVariable(T *variable) {
+bool HttpAnalyzer::isPointStructVariable(T *variable) {
   Type *pointerElementTpye;
 
   if (!variable->getType()->isPointerTy())
@@ -358,9 +355,9 @@ bool SquidAnalyzer::isPointStructVariable(T *variable) {
 /*
  * If the variable is load to other variable, also check the usage of the other variable
  */
-void SquidAnalyzer::handleMemoryAcess(Instruction *inst,
-                               variable_wrapper *variable,
-                               std::vector<variable_wrapper> *immediate_variable) {
+void HttpAnalyzer::handleMemoryAcess(Instruction *inst,
+                                      variable_wrapper *variable,
+                                      std::vector<variable_wrapper> *immediate_variable) {
   if (StoreInst *storeInst = dyn_cast<StoreInst>(inst)) {
     if (storeInst->getValueOperand() == variable->variable) {
       struct variable_wrapper v;
@@ -385,7 +382,7 @@ void SquidAnalyzer::handleMemoryAcess(Instruction *inst,
  * Find all the target variable
  */
 template<typename T>
-std::vector<Value *> SquidAnalyzer::getVariables(T *variable, std::vector<int> *offsetList) {
+std::vector<Value *> HttpAnalyzer::getVariables(T *variable, std::vector<int> *offsetList) {
   std::vector<struct variable_wrapper> immediate_variable;
   std::vector<Value *> result;
   struct variable_wrapper init_variable;
@@ -455,7 +452,7 @@ std::vector<Value *> SquidAnalyzer::getVariables(T *variable, std::vector<int> *
 * @param variable the target variable
 */
 template<typename T>
-void SquidAnalyzer::storeVariableUse(std::string configuration, T *variable) {
+void HttpAnalyzer::storeVariableUse(std::string configuration, T *variable) {
   std::vector<Value *> immediate_variable;
   std::vector<Value *> visited_variable;
   immediate_variable.push_back(variable);
@@ -494,9 +491,9 @@ void SquidAnalyzer::storeVariableUse(std::string configuration, T *variable) {
   }
 }
 
-void SquidAnalyzer::getAnalysisUsage(AnalysisUsage &AU) const {
+void HttpAnalyzer::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addRequired<llvm::CallGraphWrapperPass>();
 }
 
-char SquidAnalyzer::ID = 0;
-static RegisterPass<SquidAnalyzer> X("squid", "This is http analyzer");
+char HttpAnalyzer::ID = 0;
+static RegisterPass<HttpAnalyzer> X("httpd", "This is http analyzer");
