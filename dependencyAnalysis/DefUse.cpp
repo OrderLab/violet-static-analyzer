@@ -96,7 +96,6 @@ bool DefUse::runOnModule(Module &M) {
   recalculate_offset();
 
   // If the variable is a global variable, get the variable usage
-
   for (auto &Global : M.getGlobalList()) {
     handleVariableUse(&Global);
   }
@@ -334,7 +333,7 @@ bool DefUse::runOnModule(Module &M) {
         outFile2 << "The related configurations are \n";
       for (std::string conf:usage.prev_configurations) {
 //        outFile2 << conf << ",";
-        if (std::find(visited_configuration.begin(),visited_configuration.end(),conf)== visited_configuration.end()) {
+        if (std::find(visited_configuration.begin(),visited_configuration.end(),conf) == visited_configuration.end()) {
             outFile << conf<< ",";
             visited_configuration.push_back(conf);
         }

@@ -78,18 +78,13 @@ bool HttpMap::runOnModule(Module &M) {
                   val = inst->getOperand(0);
                   if (isa<Instruction>(val))
                     inst = dyn_cast<Instruction>(val);
-//                  errs() << *inst << "\n";
                 } else if (inst->getOpcode() == Instruction::Load){
                   val = inst->getOperand(0);
                   if (isa<Instruction>(val))
                     inst = dyn_cast<Instruction>(val);
-//                  errs() << *inst << "\n";
                 }
               }
             }
-
-
-//            CallInst* parseInst = getParseInstruction(b);
 
               if (varInfo.name != "") {
                 errs() << "{\""<< funMap.config_name << "\",\"" << varInfo.name << "\",{";
