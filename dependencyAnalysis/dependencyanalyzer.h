@@ -51,7 +51,7 @@ class DependencyAnalyzer : public ModulePass {
 
   void getAnalysisUsage(AnalysisUsage &Info) const override;
   bool getDependentConfiguration(Module &M);
-  void getDependentConfig();
+  void relatedConfigurationAnalyze();
   void calculateSize(Module &M);
   bool recalculateOffset(Module &M);
   void getPrevConfig(std::string config_name, UsageInfo *usage);
@@ -72,7 +72,7 @@ class DependencyAnalyzer : public ModulePass {
   template<typename T>
   std::vector<Value *> getBitVariables(T *variable, long long bitvalue);
   template<typename T>
-  bool findConfigIndex(T *variable, std::vector<int> *dst);
+  bool getConfigIndex(T *variable, std::vector<int> *dst);
   template<typename T>
   void getConfigurationUsage(T *config, std::vector<int> configIndex);
   bool isStructMemeber(int index);
@@ -86,6 +86,8 @@ class DependencyAnalyzer : public ModulePass {
                             int64_t offset,
                             std::vector<Value *> *variables);
   bool usageAnalysis(Module &M);
+  char *cppDemangle(const char *abiName);
+  int getBitIndex(int64_t option);
 
   std::vector<int> sysvarOffsets;
   std::vector<ConfigInfo> configInfoList;

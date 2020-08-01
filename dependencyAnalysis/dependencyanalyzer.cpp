@@ -21,11 +21,14 @@
 #include "llvm/ADT/SCCIterator.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/IR/TypeFinder.h"
+
 #include "dependencyanalyzer.h"
 #include <vector>
 #include <list>
 #include <queue>
 #include <fstream>
+#include <cxxabi.h>
+//#define CLASS_NAME(somePointer) ((const char *) cppDemangle(typeid(*somePointer).name()).get() )
 
 using namespace llvm;
 static cl::opt<int> gAnalysisType("t", cl::desc("Specify what type of analyze the user want"), cl::value_desc("1"));
@@ -73,7 +76,8 @@ bool DependencyAnalyzer::usageAnalysis(Module &M) {
   // Search the global variable first, find the usage of configurations in global variable
   for (auto &Global : M.getGlobalList()) {
     std::vector<int> config_index;
-    if (findConfigIndex(&(Global), &config_index)) {
+    if (getConfigIndex(&(Global), &config_index)) {
+//      errs() << "the global variable " << Global <<"\n";
       getConfigurationUsage(&Global, config_index);
     }
   }
@@ -83,7 +87,7 @@ bool DependencyAnalyzer::usageAnalysis(Module &M) {
        func_iterator != moduleEnd; func_iterator++) {
     for (auto arg = func_iterator->arg_begin(); arg != func_iterator->arg_end(); arg++) {
       std::vector<int> config_index;
-      if (findConfigIndex(&(*arg), &config_index)) {
+      if (getConfigIndex(&(*arg), &config_index)) {
         getConfigurationUsage(&(*arg),config_index);
       }
     }
@@ -94,24 +98,61 @@ bool DependencyAnalyzer::usageAnalysis(Module &M) {
            inst_iterator != blockEnd; inst_iterator++) {
         Instruction *inst = dyn_cast<Instruction>(inst_iterator);
         std::vector<int> config_index;
-        if (findConfigIndex(&(*inst), &config_index)) {
+        if (getConfigIndex(&(*inst), &config_index)) {
           getConfigurationUsage(inst,config_index);
+        }
+
+        if (CallInst* callInst = dyn_cast<CallInst>(inst)) {
+          llvm::ConstantInt *CI;
+          Function *caller = callInst->getCalledFunction();
+          if (!caller)
+            continue;
+
+          if (caller->getName() == "thd_test_options") {
+            if(CI = dyn_cast<llvm::ConstantInt>(callInst->getArgOperand(1))){
+              if (int index = getBitIndex(CI->getSExtValue())) {
+                if(index != -1) {
+                  storeVariableUse(configInfoList[index].config_name, callInst);
+                }
+              }
+            }
+          }
         }
       }
     }
   }
 
+  relatedConfigurationAnalyze();
+
   for (auto usesInfo:configUsages) {
     std::vector<Function*> visited_functions;
-    outFile << "{ configuration: " << usesInfo.first << ", function: [";
+    outFile << "{ configuration: " << usesInfo.first << ",[";
     for (auto useInfo: usesInfo.second) {
       Function *func = useInfo.inst->getParent()->getParent();
       if (!func)
         continue;
       if (std::find(visited_functions.begin(), visited_functions.end(), func)
           == visited_functions.end()) {
-        outFile << func->getName() << "\n";
+        char *function_name = cppDemangle(func->getName().data());
+        if (function_name) {
+          outFile << function_name << ";";
+        } else {
+          outFile << func->getName() << ";";
+        }
         visited_functions.push_back(func);
+
+        for (Function * prev_func :useInfo.prev_functions) {
+          if (std::find(visited_functions.begin(), visited_functions.end(), prev_func)
+              == visited_functions.end()) {
+            char *function_name = cppDemangle(prev_func->getName().data());
+            if (function_name) {
+              outFile << function_name << ";";
+            } else {
+              outFile << prev_func->getName() << ";";
+            }
+            visited_functions.push_back(func);
+          }
+        }
       }
     }
     outFile << "]}\n";
@@ -133,7 +174,7 @@ bool DependencyAnalyzer::getDependentConfiguration(Module &M) {
   // Search the global variable first, find the usage of configurations in global variable
   for (auto &Global : M.getGlobalList()) {
     std::vector<int> config_index;
-    if (findConfigIndex(&(Global), &config_index)) {
+    if (getConfigIndex(&(Global), &config_index)) {
       getConfigurationUsage(&Global, config_index);
     }
   }
@@ -143,7 +184,7 @@ bool DependencyAnalyzer::getDependentConfiguration(Module &M) {
        func_iterator != moduleEnd; func_iterator++) {
     for (auto arg = func_iterator->arg_begin(); arg != func_iterator->arg_end(); arg++) {
       std::vector<int> config_index;
-      if (findConfigIndex(&(*arg), &config_index)) {
+      if (getConfigIndex(&(*arg), &config_index)) {
         getConfigurationUsage(&(*arg),config_index);
       }
     }
@@ -154,14 +195,14 @@ bool DependencyAnalyzer::getDependentConfiguration(Module &M) {
            inst_iterator != blockEnd; inst_iterator++) {
         Instruction *inst = dyn_cast<Instruction>(inst_iterator);
         std::vector<int> config_index;
-        if (findConfigIndex(&(*inst), &config_index)) {
+        if (getConfigIndex(&(*inst), &config_index)) {
           getConfigurationUsage(inst,config_index);
         }
       }
     }
   }
 
-  getDependentConfig();
+  relatedConfigurationAnalyze();
 
   //Log the related configuration result
   for (auto usesInfo:configUsages) {
@@ -198,7 +239,7 @@ bool DependencyAnalyzer::getDependentConfiguration(Module &M) {
   return true;
 }
 
-void DependencyAnalyzer::getDependentConfig() {
+void DependencyAnalyzer::relatedConfigurationAnalyze() {
   CallGraph &CG = getAnalysis<CallGraphWrapperPass>().getCallGraph();
 
   // Get the Control flow of the executable
@@ -241,7 +282,6 @@ void DependencyAnalyzer::getDependentConfig() {
 template<typename T>
 void DependencyAnalyzer::getConfigurationUsage(T *config, std::vector<int> configIndex) {
   std::map<std::string, std::vector<Value *>> related_variables;
-//  errs() << "val " << *config << "\n";
 
   /** Handle the struct and bit variable**/
   for (int index:configIndex) {
@@ -271,7 +311,6 @@ void DependencyAnalyzer::getConfigurationUsage(T *config, std::vector<int> confi
 
   for (auto variables: related_variables)
     for (auto var:variables.second) {
-//      errs() << "   def " << *var << "\n";
       storeVariableUse(variables.first, var);
     }
 }
@@ -279,6 +318,13 @@ void DependencyAnalyzer::getConfigurationUsage(T *config, std::vector<int> confi
 /** Check whether the configuration is a struct member **/
 bool DependencyAnalyzer::isStructMemeber(int index) {
   return configInfoList[index].offsetList.empty();
+}
+
+char *DependencyAnalyzer::cppDemangle(const char *abiName)
+{
+  int status;
+  char *ret = abi::__cxa_demangle(abiName, 0, 0, &status);
+  return ret;
 }
 
 void DependencyAnalyzer::getPrevConfig(std::string config_name, UsageInfo *usage) {
@@ -608,7 +654,7 @@ void DependencyAnalyzer::calculateSize(Module &M) {
  * Return ture for getting the config_name info
  */
 template<typename T>
-bool DependencyAnalyzer::findConfigIndex(T *variable, std::vector<int> *dst) {
+bool DependencyAnalyzer::getConfigIndex(T *variable, std::vector<int> *dst) {
   int i = -1;
   if (dyn_cast<LoadInst>(variable)) {
     return false;
@@ -634,6 +680,18 @@ bool DependencyAnalyzer::findConfigIndex(T *variable, std::vector<int> *dst) {
     return false;
   else
     return true;
+}
+
+int DependencyAnalyzer::getBitIndex(int64_t option) {
+  int i = -1;
+  for (ConfigInfo cInfo: configInfoList) {
+    i++;
+    if(option & cInfo.bit) {
+      if (cInfo.type_name == "class.THD")
+        return i;
+    }
+  }
+  return -1;
 }
 
 template<typename T>
@@ -678,36 +736,52 @@ DependencyAnalyzer::VariableWrapper DependencyAnalyzer::handleMemoryAcess(Instru
 template<typename T>
 std::vector<Value *> DependencyAnalyzer::getBitVariables(T *variable, long long bitvalue) {
   std::vector<Value *> immediate_variable;
+  std::vector<Value *> visited_variables;
   std::vector<Value *> result;
   immediate_variable.push_back(variable);
 
   while (!immediate_variable.empty()) {
     Value *value = immediate_variable.back();
-
     immediate_variable.pop_back();
+
+    if (std::find(visited_variables.begin(), visited_variables.end(), value)
+        != visited_variables.end())
+      continue;
+    visited_variables.push_back(value);
+
     for (auto use: value->users()) {
-      Instruction *inst_use = dyn_cast<Instruction>(use);
-      if (auto *storeInst = dyn_cast<StoreInst>(inst_use)) {
+      Instruction *inst = dyn_cast<Instruction>(use);
+
+      if (auto *storeInst = dyn_cast<StoreInst>(inst)) {
         if (storeInst->getValueOperand() == value) {
           immediate_variable.push_back(storeInst->getPointerOperand());
         }
       }
 
-      if (auto *loadInst = dyn_cast<LoadInst>(inst_use)) {
+      if (auto *loadInst = dyn_cast<LoadInst>(inst)) {
         if (loadInst->getPointerOperand() == value) {
           immediate_variable.push_back(loadInst);
         }
       }
 
-      if (inst_use->getOpcode() == Instruction::And) {
-        if (llvm::ConstantInt *CI = dyn_cast<llvm::ConstantInt>(inst_use->getOperand(0)))
+      if (inst->getOpcode() == Instruction::And) {
+        if (llvm::ConstantInt *CI = dyn_cast<llvm::ConstantInt>(inst->getOperand(0)))
           if ((CI->getZExtValue() & bitvalue) && (CI->getSExtValue() > 0))
-            result.push_back(inst_use);
+            result.push_back(inst);
 
-        if (llvm::ConstantInt *CI = dyn_cast<llvm::ConstantInt>(inst_use->getOperand(1)))
+        if (llvm::ConstantInt *CI = dyn_cast<llvm::ConstantInt>(inst->getOperand(1)))
           if ((CI->getZExtValue() & bitvalue) && (CI->getSExtValue() > 0))
-            result.push_back(inst_use);
+            result.push_back(inst);
+
+        for(unsigned int i = 0; i < inst->getNumOperands(); i++) {
+          if (inst->getOperand(i) == value) {
+            immediate_variable.push_back(inst);
+            break;
+          }
+        }
       }
+
+
     }
   }
   return result;
@@ -784,6 +858,7 @@ std::vector<Value *> DependencyAnalyzer::getStructMember(T *variable, std::vecto
     }
 
   }
+
   return result;
 }
 
@@ -807,7 +882,6 @@ void DependencyAnalyzer::storeVariableUse(std::string configuration, T *variable
         != visited_variables.end())
       continue;
     visited_variables.push_back(value);
-//    errs() << "variable " << *value << "\n";
 
     /** Find the use of the instance member**/
     if (auto *getElementPtrInst = dyn_cast<GetElementPtrInst>(value)) {
@@ -888,7 +962,6 @@ void DependencyAnalyzer::storeStructMemberUse(Value *value,  int64_t offset, std
 //              errs() << "add value " << *getElementPtrInst << ";func " << getElementPtrInst->getParent()->getParent()->getName() << "\n";
               variables->push_back(getElementPtrInst);
             }
-
         }
       } else {
         Value *val = dyn_cast<Value>(U);
