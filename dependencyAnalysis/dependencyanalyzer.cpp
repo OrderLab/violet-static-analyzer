@@ -85,6 +85,7 @@ bool DependencyAnalyzer::usageAnalysis(Module &M) {
   // Find the configuration usage for local variable or argument
   for (Module::iterator func_iterator = M.begin(), moduleEnd = M.end();
        func_iterator != moduleEnd; func_iterator++) {
+
     for (auto arg = func_iterator->arg_begin(); arg != func_iterator->arg_end(); arg++) {
       std::vector<int> config_index;
       if (getConfigIndex(&(*arg), &config_index)) {
@@ -178,7 +179,7 @@ bool DependencyAnalyzer::getDependentConfiguration(Module &M) {
       getConfigurationUsage(&Global, config_index);
     }
   }
-
+  errs() << "finish the global\n";
   // Find the configuration usage for local variable or argument
   for (Module::iterator func_iterator = M.begin(), moduleEnd = M.end();
        func_iterator != moduleEnd; func_iterator++) {
@@ -220,42 +221,45 @@ bool DependencyAnalyzer::getDependentConfiguration(Module &M) {
   errs() << "start to caclulate the related config\n";
   relatedConfigurationAnalyze();
   errs() << "finish to caclulate the related config\n";
-  //Log the related configuration result
-  for (auto usesInfo:configUsages) {
-    std::vector<std::string> visited_configuration;
-    outFile << "{ configuration: " << usesInfo.first << ", prev configurations: [";
-    for (auto useInfo: usesInfo.second) {
-      for (std::string conf:useInfo.prev_configurations) {
-        if (std::find(visited_configuration.begin(), visited_configuration.end(), conf)
-            == visited_configuration.end()) {
-          outFile << conf << ",";
-          visited_configuration.push_back(conf);
-        }
-      }
-    }
-    outFile << "]}\n";
-  }
-
-  for (auto usesInfo:configUsages) {
-    std::vector<std::string> visited_configuration;
-    outFile << "{ configuration: " << usesInfo.first << ", succ configurations: [";
-    for (auto useInfo: usesInfo.second) {
-      for (std::string conf:useInfo.succ_configurations) {
-        if (std::find(visited_configuration.begin(), visited_configuration.end(), conf)
-            == visited_configuration.end()) {
-          outFile << conf << ",";
-          visited_configuration.push_back(conf);
-        }
-      }
-    }
-    outFile << "]},\n";
-  }
-  outFile.close();
+//  //Log the related configuration result
+//  for (auto usesInfo:configUsages) {
+//    std::vector<std::string> visited_configuration;
+//    outFile << "{ configuration: " << usesInfo.first << ", prev configurations: [";
+//    for (auto useInfo: usesInfo.second) {
+//      for (std::string conf:useInfo.prev_configurations) {
+//        if (std::find(visited_configuration.begin(), visited_configuration.end(), conf)
+//            == visited_configuration.end()) {
+//          outFile << conf << ",";
+//          visited_configuration.push_back(conf);
+//        }
+//      }
+//    }
+//    outFile << "]}\n";
+//  }
+//
+//  for (auto usesInfo:configUsages) {
+//    std::vector<std::string> visited_configuration;
+//    outFile << "{ configuration: " << usesInfo.first << ", succ configurations: [";
+//    for (auto useInfo: usesInfo.second) {
+//      for (std::string conf:useInfo.succ_configurations) {
+//        if (std::find(visited_configuration.begin(), visited_configuration.end(), conf)
+//            == visited_configuration.end()) {
+//          outFile << conf << ",";
+//          visited_configuration.push_back(conf);
+//        }
+//      }
+//    }
+//    outFile << "]},\n";
+//  }
+//  outFile.close();
 
   return true;
 }
 
 void DependencyAnalyzer::relatedConfigurationAnalyze() {
+  std::string outName = gExecutableName + "_result.log";
+  std::error_code OutErrorInfo;
+  llvm::raw_fd_ostream outFile(llvm::StringRef(outName), OutErrorInfo, sys::fs::F_None);
   CallGraph &CG = getAnalysis<CallGraphWrapperPass>().getCallGraph();
 
   // Get the Control flow of the executable
@@ -292,7 +296,33 @@ void DependencyAnalyzer::relatedConfigurationAnalyze() {
       getPrevConfig(usages.first, &usage);
       getSuccConfig(usages.first, &usage);
     }
+    std::vector<std::string> visited_configuration;
+    outFile << "{ configuration: " << usages.first << ", prev configurations: [";
+    for (auto useInfo: usages.second) {
+      for (std::string conf:useInfo.prev_configurations) {
+        if (std::find(visited_configuration.begin(), visited_configuration.end(), conf)
+            == visited_configuration.end()) {
+          outFile << conf << ",";
+          visited_configuration.push_back(conf);
+        }
+      }
+    }
+    outFile << "]}\n";
+    std::vector<std::string> visited_succ_configuration;
+    outFile << "{ configuration: " << usages.first << ", succ configurations: [";
+    for (auto useInfo: usages.second) {
+      for (std::string conf:useInfo.succ_configurations) {
+        if (std::find(visited_succ_configuration.begin(), visited_succ_configuration.end(), conf)
+            == visited_succ_configuration.end()) {
+          outFile << conf << ",";
+          visited_configuration.push_back(conf);
+        }
+      }
+    }
+    outFile << "]},\n";
+    usages.second.clear();
   }
+  outFile.close();
 }
 
 template<typename T>
@@ -561,7 +591,7 @@ std::string DependencyAnalyzer::parseName(std::string *line) {
   ulong position = line->find("\"");
   std::string token;
   if (position == std::string::npos) {
-    errs() << "can't fine the name " << *line << "\n";
+    errs() << "can't find the name " << *line << "\n";
     return "";
   }
   *line = line->substr(position + 1, line->size());
@@ -575,7 +605,7 @@ long long DependencyAnalyzer::parseLong(std::string *line) {
   ulong position = line->find(",");
   std::string token;
   if (position == std::string::npos) {
-    errs() << "can't fine the long variable " << *line << "\n";
+    errs() << "can't find the long variable " << *line << "\n";
     return -2;
   }
   *line = line->substr(position + 1, line->size());
@@ -589,7 +619,7 @@ int DependencyAnalyzer::parseInteger(std::string *line) {
   ulong position = line->find(",");
   std::string token;
   if (position == std::string::npos) {
-    errs() << "can't fine the integer variable " << *line << "\n";
+    errs() << "can't find the integer variable " << *line << "\n";
     return -2;
   }
   token = line->substr(0, position);
@@ -888,7 +918,6 @@ void DependencyAnalyzer::storeVariableUse(std::string configuration, T *variable
   std::map<Instruction *, Function *> callerMap;
   std::vector<Value *> visited_variables;
   std::vector<Parameter> visited_parameters;
-
   variables.push_back(variable);
   while (!variables.empty()) {
     Value *value = variables.back();
@@ -934,7 +963,6 @@ void DependencyAnalyzer::storeVariableUse(std::string configuration, T *variable
         configUsages[configuration] = usagelist;
 
         Function *function = inst->getParent()->getParent();
-//        errs() << "usage: " << *inst << "; func " << function->getName() << "\n";
         std::map<std::string, std::vector<Instruction *>> &usages = functionUsages[function];
         std::vector<Instruction *> &configUsages = usages[configuration];
         configUsages.push_back(inst);
