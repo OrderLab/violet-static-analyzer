@@ -222,36 +222,36 @@ bool DependencyAnalyzer::getDependentConfiguration(Module &M) {
   relatedConfigurationAnalyze();
   errs() << "finish to caclulate the related config\n";
 //  //Log the related configuration result
-//  for (auto usesInfo:configUsages) {
-//    std::vector<std::string> visited_configuration;
-//    outFile << "{ configuration: " << usesInfo.first << ", prev configurations: [";
-//    for (auto useInfo: usesInfo.second) {
-//      for (std::string conf:useInfo.prev_configurations) {
-//        if (std::find(visited_configuration.begin(), visited_configuration.end(), conf)
-//            == visited_configuration.end()) {
-//          outFile << conf << ",";
-//          visited_configuration.push_back(conf);
-//        }
-//      }
-//    }
-//    outFile << "]}\n";
-//  }
-//
-//  for (auto usesInfo:configUsages) {
-//    std::vector<std::string> visited_configuration;
-//    outFile << "{ configuration: " << usesInfo.first << ", succ configurations: [";
-//    for (auto useInfo: usesInfo.second) {
-//      for (std::string conf:useInfo.succ_configurations) {
-//        if (std::find(visited_configuration.begin(), visited_configuration.end(), conf)
-//            == visited_configuration.end()) {
-//          outFile << conf << ",";
-//          visited_configuration.push_back(conf);
-//        }
-//      }
-//    }
-//    outFile << "]},\n";
-//  }
-//  outFile.close();
+  for (auto usesInfo:configUsages) {
+    std::vector<std::string> visited_configuration;
+    outFile << "{ configuration: " << usesInfo.first << ", prev configurations: [";
+    for (auto useInfo: usesInfo.second) {
+      for (std::string conf:useInfo.prev_configurations) {
+        if (std::find(visited_configuration.begin(), visited_configuration.end(), conf)
+            == visited_configuration.end()) {
+          outFile << conf << ",";
+          visited_configuration.push_back(conf);
+        }
+      }
+    }
+    outFile << "]}\n";
+  }
+
+  for (auto usesInfo:configUsages) {
+    std::vector<std::string> visited_configuration;
+    outFile << "{ configuration: " << usesInfo.first << ", succ configurations: [";
+    for (auto useInfo: usesInfo.second) {
+      for (std::string conf:useInfo.succ_configurations) {
+        if (std::find(visited_configuration.begin(), visited_configuration.end(), conf)
+            == visited_configuration.end()) {
+          outFile << conf << ",";
+          visited_configuration.push_back(conf);
+        }
+      }
+    }
+    outFile << "]},\n";
+  }
+  outFile.close();
 
   return true;
 }
@@ -296,33 +296,7 @@ void DependencyAnalyzer::relatedConfigurationAnalyze() {
       getPrevConfig(usages.first, &usage);
       getSuccConfig(usages.first, &usage);
     }
-    std::vector<std::string> visited_configuration;
-    outFile << "{ configuration: " << usages.first << ", prev configurations: [";
-    for (auto useInfo: usages.second) {
-      for (std::string conf:useInfo.prev_configurations) {
-        if (std::find(visited_configuration.begin(), visited_configuration.end(), conf)
-            == visited_configuration.end()) {
-          outFile << conf << ",";
-          visited_configuration.push_back(conf);
-        }
-      }
-    }
-    outFile << "]}\n";
-    std::vector<std::string> visited_succ_configuration;
-    outFile << "{ configuration: " << usages.first << ", succ configurations: [";
-    for (auto useInfo: usages.second) {
-      for (std::string conf:useInfo.succ_configurations) {
-        if (std::find(visited_succ_configuration.begin(), visited_succ_configuration.end(), conf)
-            == visited_succ_configuration.end()) {
-          outFile << conf << ",";
-          visited_configuration.push_back(conf);
-        }
-      }
-    }
-    outFile << "]},\n";
-    usages.second.clear();
   }
-  outFile.close();
 }
 
 template<typename T>
@@ -424,6 +398,7 @@ void DependencyAnalyzer::getPrevConfig(std::string config_name, UsageInfo *usage
               }
             }
           }
+          delete PostDT;
         }
     }
   }
@@ -476,6 +451,7 @@ void DependencyAnalyzer::getSuccConfig(std::string config_name, UsageInfo *usage
         }
       }
     }
+    delete PostDT;
   }
 
   Function *function = usage->inst->getParent()->getParent();
@@ -511,6 +487,7 @@ void DependencyAnalyzer::getSuccConfig(std::string config_name, UsageInfo *usage
             }
           }
         }
+        delete PostDT;
       }
   }
 }
