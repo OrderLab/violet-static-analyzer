@@ -198,12 +198,28 @@ bool DependencyAnalyzer::getDependentConfiguration(Module &M) {
         if (getConfigIndex(&(*inst), &config_index)) {
           getConfigurationUsage(inst,config_index);
         }
+        if (CallInst* callInst = dyn_cast<CallInst>(inst)) {
+          llvm::ConstantInt *CI;
+          Function *caller = callInst->getCalledFunction();
+          if (!caller)
+            continue;
+
+          if (caller->getName() == "thd_test_options") {
+            if(CI = dyn_cast<llvm::ConstantInt>(callInst->getArgOperand(1))){
+              if (int index = getBitIndex(CI->getSExtValue())) {
+                if(index != -1) {
+                  storeVariableUse(configInfoList[index].config_name, callInst);
+                }
+              }
+            }
+          }
+        }
       }
     }
   }
-
+  errs() << "start to caclulate the related config\n";
   relatedConfigurationAnalyze();
-
+  errs() << "finish to caclulate the related config\n";
   //Log the related configuration result
   for (auto usesInfo:configUsages) {
     std::vector<std::string> visited_configuration;
@@ -585,7 +601,7 @@ void DependencyAnalyzer::calculateSize(Module &M) {
   int lastWidth;
 
   for (auto *sty : M.getIdentifiedStructTypes()) {
-    if (sty->getName() == "struct.system_variables") {
+    if (sty->getName() == "struct.System_variables") {
       unsigned length;
       unsigned rest = 64;
       bool flag = false;
