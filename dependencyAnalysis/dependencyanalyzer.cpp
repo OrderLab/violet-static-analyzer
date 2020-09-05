@@ -31,7 +31,7 @@
 //#define CLASS_NAME(somePointer) ((const char *) cppDemangle(typeid(*somePointer).name()).get() )
 
 using namespace llvm;
-static cl::opt<int> gAnalysisType("t", cl::desc("Specify what type of analyze the user want"), cl::value_desc("1"));
+static cl::opt<std::string> gAnalysisType("t", cl::desc("Specify what type of analyze the user want"), cl::value_desc("dependency_analysis"));
 static cl::opt<std::string>
     gExecutableName("e", cl::desc("Specify the executable name"), cl::value_desc("mysql"), cl::init("mysql"));
 static cl::opt<std::string>
@@ -41,26 +41,38 @@ static cl::opt<std::string>
  * Perform the static analysis to each module,
  */
 bool DependencyAnalyzer::runOnModule(Module &M) {
-
-  switch (gAnalysisType) {
-    case DEPENDENCY_ANALYSIS: {
-      getDependentConfiguration(M);
-      break;
-    }
-    case MAPPING_ANALYSIS: {
-      break;
-    }
-    case RECALCULATE_OFFSET:
-      if (!recalculateOffset(M))
-        return false;
-      break;
-    case USAGE_ANALYSIS:
-      usageAnalysis(M);
-      break;
-    default:errs() << "Unknown analyzer type " << gAnalysisType << "\n";
+  if (gAnalysisType == "dependency_analysis") {
+    getDependentConfiguration(M);
+    return true;
+  } else if (gAnalysisType == "calculate_offset") {
+    if (!recalculateOffset(M))
       return false;
-
+  } else if (gAnalysisType == "usage_analysis") {
+    usageAnalysis(M);
+  } else {
+    errs() << "Unknown analyzer type " << gAnalysisType << "\n";
+    return false;
   }
+
+//  switch (gAnalysisType) {
+//    case DEPENDENCY_ANALYSIS: {
+//      getDependentConfiguration(M);
+//      break;
+//    }
+//    case MAPPING_ANALYSIS: {
+//      break;
+//    }
+//    case RECALCULATE_OFFSET:
+//      if (!recalculateOffset(M))
+//        return false;
+//      break;
+//    case USAGE_ANALYSIS:
+//      usageAnalysis(M);
+//      break;
+//    default:errs() << "Unknown analyzer type " << gAnalysisType << "\n";
+//      return false;
+//
+//  }
   return true;
 }
 
@@ -179,7 +191,7 @@ bool DependencyAnalyzer::getDependentConfiguration(Module &M) {
       getConfigurationUsage(&Global, config_index);
     }
   }
-  errs() << "finish the global\n";
+
   // Find the configuration usage for local variable or argument
   for (Module::iterator func_iterator = M.begin(), moduleEnd = M.end();
        func_iterator != moduleEnd; func_iterator++) {
@@ -207,10 +219,9 @@ bool DependencyAnalyzer::getDependentConfiguration(Module &M) {
 
           if (caller->getName() == "thd_test_options") {
             if(CI = dyn_cast<llvm::ConstantInt>(callInst->getArgOperand(1))){
-              if (int index = getBitIndex(CI->getSExtValue())) {
-                if(index != -1) {
-                  storeVariableUse(configInfoList[index].config_name, callInst);
-                }
+              int index = getBitIndex(CI->getSExtValue());
+              if(index != -1) {
+                 storeVariableUse(configInfoList[index].config_name, callInst);
               }
             }
           }
@@ -218,21 +229,29 @@ bool DependencyAnalyzer::getDependentConfiguration(Module &M) {
       }
     }
   }
-  errs() << "start to caclulate the related config\n";
+
   relatedConfigurationAnalyze();
-  errs() << "finish to caclulate the related config\n";
+  llvm::raw_fd_ostream outFile2(llvm::StringRef("result2.log"), OutErrorInfo, sys::fs::F_None);
 //  //Log the related configuration result
   for (auto usesInfo:configUsages) {
     std::vector<std::string> visited_configuration;
     outFile << "{ configuration: " << usesInfo.first << ", prev configurations: [";
+    outFile2 << "Configuration " << usesInfo.first << " is used in \n";
     for (auto useInfo: usesInfo.second) {
+      outFile2 << "In function " << useInfo.inst->getParent()->getParent()->getName() << "; " << *useInfo.inst << "\n";
       for (std::string conf:useInfo.prev_configurations) {
+        outFile2 << "the prev is " << conf << ",";
         if (std::find(visited_configuration.begin(), visited_configuration.end(), conf)
             == visited_configuration.end()) {
           outFile << conf << ",";
           visited_configuration.push_back(conf);
         }
       }
+      outFile2 << "\n";
+      for (auto function:useInfo.prev_functions) {
+        outFile2 << function->getName() << ",";
+      }
+      outFile2 << "\n";
     }
     outFile << "]}\n";
   }
@@ -240,14 +259,22 @@ bool DependencyAnalyzer::getDependentConfiguration(Module &M) {
   for (auto usesInfo:configUsages) {
     std::vector<std::string> visited_configuration;
     outFile << "{ configuration: " << usesInfo.first << ", succ configurations: [";
+    outFile2 << "Configuration " << usesInfo.first << " is used in \n";
     for (auto useInfo: usesInfo.second) {
+      outFile2 << "In function " << useInfo.inst->getParent()->getParent()->getName() << "; " << *useInfo.inst << "\n";
       for (std::string conf:useInfo.succ_configurations) {
+        outFile2 << "the succ is " << conf << ",";
         if (std::find(visited_configuration.begin(), visited_configuration.end(), conf)
             == visited_configuration.end()) {
           outFile << conf << ",";
           visited_configuration.push_back(conf);
         }
       }
+      outFile2 << "\n";
+      for (auto function:useInfo.succ_functions) {
+        outFile2 << "the succ function is " << function->getName() << ",";
+      }
+      outFile2 << "\n";
     }
     outFile << "]},\n";
   }
@@ -407,12 +434,13 @@ void DependencyAnalyzer::getPrevConfig(std::string config_name, UsageInfo *usage
 void DependencyAnalyzer::getSuccConfig(std::string config_name, UsageInfo *usage) {
   std::vector<CallerRecord> callees;
   std::vector<Function *> visitedCallees;
+  bool debug = false;
   callees = calleeGraph[usage->inst->getParent()->getParent()];
 
   while (!callees.empty()) {
     CallerRecord calleeRecord = callees.back();
     callees.pop_back();
-    if (std::find(visitedCallees.begin(), visitedCallees.end(), calleeRecord.first->getParent()->getParent())
+    if (std::find(visitedCallees.begin(), visitedCallees.end(), calleeRecord.second)
         != visitedCallees.end())
       continue;
 
@@ -437,8 +465,8 @@ void DependencyAnalyzer::getSuccConfig(std::string config_name, UsageInfo *usage
           prevBlocks.push_back(*PI);
           if (*PI == usage->inst->getParent()) {
             flag = false;
-            Function *callee = calleeRecord.first->getParent()->getParent();
-            visitedCallees.push_back(calleeRecord.first->getParent()->getParent());
+            Function *callee = calleeRecord.second;
+            visitedCallees.push_back(calleeRecord.second);
             std::map<std::string, std::vector<Instruction *>> confFunctionMap = functionUsages[callee];
             if (!confFunctionMap.empty()) {
               for (auto conf: confFunctionMap) {
@@ -608,7 +636,7 @@ void DependencyAnalyzer::calculateSize(Module &M) {
   int lastWidth;
 
   for (auto *sty : M.getIdentifiedStructTypes()) {
-    if (sty->getName() == "struct.System_variables") {
+    if (sty->getName() == "struct.system_variables") {
       unsigned length;
       unsigned rest = 64;
       bool flag = false;
@@ -710,8 +738,10 @@ int DependencyAnalyzer::getBitIndex(int64_t option) {
   for (ConfigInfo cInfo: configInfoList) {
     i++;
     if(option & cInfo.bit) {
-      if (cInfo.type_name == "class.THD")
+      if (cInfo.type_name == "class.THD") {
         return i;
+      }
+
     }
   }
   return -1;
@@ -944,7 +974,7 @@ void DependencyAnalyzer::storeVariableUse(std::string configuration, T *variable
         std::vector<Instruction *> &configUsages = usages[configuration];
         configUsages.push_back(inst);
       } else {
-        errs() << "no instruction " << *U << "\n";
+//        errs() << "no instruction " << *U << "\n";
       }
     }
   }
@@ -1045,7 +1075,7 @@ Value *DependencyAnalyzer::getDataRelatedVariable(Instruction *inst,
             unsigned int index = 1;
 
             if (func->arg_size() <= i) {
-              errs() << "can't handle random parameter now\n";
+//              errs() << "can't handle random parameter now\n";
               continue;
             }
 
@@ -1077,7 +1107,7 @@ Value *DependencyAnalyzer::getDataRelatedVariable(Instruction *inst,
                   unsigned int index = 1;
 
                   if (func->arg_size() <= i) {
-                    errs() << "can't handle random parameter now\n";
+//                    errs() << "can't handle random parameter now\n";
                     continue;
                   }
 
@@ -1100,7 +1130,7 @@ Value *DependencyAnalyzer::getDataRelatedVariable(Instruction *inst,
                     return &(*arg);
                   }
                 } else {
-                  errs() << "op0 is not a function\n";
+//                  errs() << "op0 is not a function\n";
                 }
               }
             }
@@ -1124,7 +1154,7 @@ Value *DependencyAnalyzer::getDataRelatedVariable(Instruction *inst,
             unsigned int index = 1;
 
             if (func->arg_size() <= i) {
-              errs() << "can't handle random parameter now\n";
+//              errs() << "can't handle random parameter now\n";
               continue;
             }
 
@@ -1156,7 +1186,7 @@ Value *DependencyAnalyzer::getDataRelatedVariable(Instruction *inst,
                   unsigned int index = 1;
 
                   if (func->arg_size() <= i) {
-                    errs() << "can't handle random parameter now\n";
+//                    errs() << "can't handle random parameter now\n";
                     continue;
                   }
 
@@ -1179,7 +1209,7 @@ Value *DependencyAnalyzer::getDataRelatedVariable(Instruction *inst,
                     return &(*arg);
                   }
                 } else {
-                  errs() << "op0 is not a function\n";
+//                  errs() << "op0 is not a function\n";
                 }
               }
             }

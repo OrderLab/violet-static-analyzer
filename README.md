@@ -1,3 +1,13 @@
 # Violet Static Analyzer
 
-Built on top of LLVM 3.8
+## Requirement
+
+LLVM 3.8
+
+## Compilation
+
+```bash
+$ mkdir build && cd build
+$ cmake ..
+$ make -j4
+```
