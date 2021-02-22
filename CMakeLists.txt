@@ -22,6 +22,5 @@ include(AddLLVM)
 #include(AddLLVM)
 include_directories(dependencyAnalysis)
 add_subdirectory(dependencyAnalysis)
-add_subdirectory(hello)
 
 #add_executable(static_analyzer main.cpp)
